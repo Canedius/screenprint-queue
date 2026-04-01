@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Виробнича черга — Шовкотрафарет</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script>tailwind.config = { darkMode: 'class' }</script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="config.js"></script>
+  <style>
+    .inp {
+      width: 100%;
+      padding: 0.5rem 0.75rem;
+      border: 1px solid #d1d5db;
+      border-radius: 0.5rem;
+      background: white;
+      font-size: 0.875rem;
+      transition: border-color 0.15s;
+      color: #111827;
+    }
+    .inp:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,.15); }
+    .dark .inp { background: #374151; border-color: #4b5563; color: #f3f4f6; }
+    .dark .inp:focus { border-color: #60a5fa; }
+    textarea.inp { resize: vertical; }
+  </style>
+</head>
+<body class="antialiased">
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useContext, createContext, useCallback, useMemo } = React;
+
+// ── CONSTANTS ────────────────────────────────────────────────────────────────
+const CAP = 500;
+
+// ── API ───────────────────────────────────────────────────────────────────────
+const BASE = () => (typeof N8N_BASE !== 'undefined' ? N8N_BASE : '');
+const post = (path, body) => fetch(`${BASE()}${path}`, {
+  method: 'POST',
+  headers: {'Content-Type':'application/json'},
+  body: JSON.stringify(body)
+}).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+
+const api = {
+  getOrders:   ()     => fetch(`${BASE()}/screenprint/orders`).then(r=>{ if(!r.ok) throw new Error(r.status); return r.json(); }),
+  createOrder: (d)    => post('/screenprint/orders', d),
+  updateOrder: (id,d) => post('/screenprint/update', {...d, id}),
+  deleteOrder: (id)   => post('/screenprint/delete', {id}),
+};
+
+const INK_TYPES = {
+  plastisol: { label: 'Пластизольна', note: 'Полімеризація 120–160°C. Не сохне на трафареті. Найпоширеніша.' },
+  water:     { label: 'Водна',        note: 'М\'яка на дотик, екологічна. Швидко сохне на сітці — потребує уваги.' },
+  solvent:   { label: 'Сольвентна',   note: 'Для синтетики. Висока хімічна стійкість, потрібна вентиляція.' },
+  discharge: { label: 'Розрядна',     note: 'Знебарвлює тканину. Тільки 100% бавовна темних кольорів.' },
+  special:   { label: 'Спеціальна',   note: 'Металік, флуоресцентна, глітер, пуф — уточнювати окремо.' },
+};
+
+const POSITIONS = {
+  front:  'Перед',
+  back:   'Спина',
+  sleeve: 'Рукав',
+  chest:  'Лівий груд',
+  combo:  'Перед + Спина',
+  other:  'Інше',
+};
+
+const PRIORITIES = { urgent: '🔴 Терміново', week: '🟡 Цього тижня', queue: '🟢 В черзі' };
+const STATUSES   = { accepted: 'Прийнято', in_progress: 'В роботі', ready: 'Готово', issued: 'Видано' };
+
+// ── DATE UTILS ───────────────────────────────────────────────────────────────
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function ensureWD(s) {
+  let d = new Date((s||todayStr())+'T12:00:00');
+  while (d.getDay()===0||d.getDay()===6) d.setDate(d.getDate()+1);
+  return d.toISOString().split('T')[0];
+}
+
+function addWD(s, n) {
+  if (!n||n<=0) return s;
+  let d = new Date(s+'T12:00:00'), added=0;
+  while (added<n) { d.setDate(d.getDate()+1); if (d.getDay()!==0&&d.getDay()!==6) added++; }
+  return d.toISOString().split('T')[0];
+}
+
+function maxD(a,b) { if (!a) return b; if (!b) return a; return a>=b?a:b; }
+function fmtD(s)   { if (!s) return '—'; const [y,m,d]=s.split('-'); return `${d}.${m}.${y}`; }
+function fmtDs(s)  { if (!s) return '—'; const [,m,d]=s.split('-'); return `${d}.${m}`; }
+
+// ── CORE LOGIC ────────────────────────────────────────────────────────────────
+function recalc(orders) {
+  const pMap = {urgent:0,week:1,queue:2};
+  const active = orders.filter(o=>o.status!=='issued').sort((a,b)=>{
+    if ((pMap[a.priority]??2)!==(pMap[b.priority]??2)) return (pMap[a.priority]??2)-(pMap[b.priority]??2);
+    return new Date(a.createdAt)-new Date(b.createdAt);
+  });
+  const issued = orders.filter(o=>o.status==='issued');
+  let tail = null;
+  const result = active.map(o=>{
+    const earliest = ensureWD(o.hasProduct ? todayStr() : (o.expectedProductDate||todayStr()));
+    const start    = tail ? maxD(earliest, addWD(tail,1)) : earliest;
+    const rolls    = (o.items||0)*(o.colors||0);
+    const days     = Math.ceil(rolls/CAP)+(o.isNewDesign?1:0);
+    const end      = days>0 ? addWD(start,days) : start;
+    tail = maxD(tail, end);
+    return {...o, autoStart:start, autoEnd:end, rolls};
+  });
+  return [...result, ...issued.map(o=>({...o, rolls:(o.items||0)*(o.colors||0)}))];
+}
+
+// ── CONTEXT ───────────────────────────────────────────────────────────────────
+const ThemeCtx  = createContext();
+const OrdersCtx = createContext();
+
+function ThemeProvider({children}) {
+  const [dark,setDark] = useState(()=>localStorage.getItem('sp_theme')==='dark');
+  useEffect(()=>{
+    localStorage.setItem('sp_theme',dark?'dark':'light');
+    document.documentElement.classList.toggle('dark',dark);
+  },[dark]);
+  return <ThemeCtx.Provider value={{dark,setDark}}>{children}</ThemeCtx.Provider>;
+}
+
+function OrdersProvider({children}) {
+  const [orders,setOrders] = useState([]);
+  const [loading,setLoading] = useState(true);
+  const [error,setError] = useState(null);
+
+  // Завантаження при старті
+  useEffect(()=>{
+    if (!BASE()) { setLoading(false); setError('no_config'); return; }
+    api.getOrders()
+      .then(data=>{ setOrders(recalc(Array.isArray(data)?data:[])); setLoading(false); })
+      .catch(()=>{ setError('fetch_failed'); setLoading(false); });
+  },[]);
+
+  const addOrder = useCallback(async d=>{
+    const newOrder = {...d, id:Date.now().toString(), createdAt:new Date().toISOString()};
+    try {
+      await api.createOrder(newOrder);
+      setOrders(prev=>recalc([...prev, newOrder]));
+    } catch { alert('Помилка збереження. Перевірте з\'єднання з n8n.'); }
+  },[]);
+
+  const updateOrder = useCallback(async (id,u)=>{
+    try {
+      await api.updateOrder(id,u);
+      setOrders(prev=>recalc(prev.map(o=>o.id===id?{...o,...u}:o)));
+    } catch { alert('Помилка оновлення.'); }
+  },[]);
+
+  const deleteOrder = useCallback(async id=>{
+    try {
+      await api.deleteOrder(id);
+      setOrders(prev=>recalc(prev.filter(o=>o.id!==id)));
+    } catch { alert('Помилка видалення.'); }
+  },[]);
+
+  const reload = useCallback(()=>{
+    setLoading(true); setError(null);
+    api.getOrders()
+      .then(data=>{ setOrders(recalc(Array.isArray(data)?data:[])); setLoading(false); })
+      .catch(()=>{ setError('fetch_failed'); setLoading(false); });
+  },[]);
+
+  return <OrdersCtx.Provider value={{orders,loading,error,addOrder,updateOrder,deleteOrder,reload}}>{children}</OrdersCtx.Provider>;
+}
+
+// ── APP ───────────────────────────────────────────────────────────────────────
+function AppInner() {
+  const [page,setPage] = useState('dashboard');
+  const {loading,error,reload} = useContext(OrdersCtx);
+
+  if (loading) return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+      <div className="text-center space-y-3">
+        <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"/>
+        <p className="text-gray-500 dark:text-gray-400">Завантаження черги...</p>
+      </div>
+    </div>
+  );
+
+  if (error) return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 max-w-md w-full text-center space-y-4">
+        <div className="text-5xl">⚠️</div>
+        {error==='no_config' ? (
+          <>
+            <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100">n8n не налаштовано</h2>
+            <p className="text-sm text-gray-500">Відкрийте файл <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">config.js</code> і замініть <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">N8N_BASE</code> на адресу вашого n8n.</p>
+          </>
+        ) : (
+          <>
+            <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100">Не вдалося підключитись до n8n</h2>
+            <p className="text-sm text-gray-500">Перевірте що n8n запущено і workflow активний.<br/>URL: <span className="font-mono text-blue-500">{BASE()||'не вказано'}</span></p>
+          </>
+        )}
+        <button onClick={reload} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition-colors">
+          Спробувати ще раз
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors">
+      <Nav page={page} setPage={setPage}/>
+      <main className="max-w-7xl mx-auto px-3 py-5">
+        {page==='dashboard'    && <Dashboard/>}
+        {page==='queue'        && <Queue/>}
+        {page==='calculator'   && <Calculator/>}
+        {page==='instructions' && <Instructions/>}
+      </main>
+    </div>
+  );
+}
+
+function App() {
+  return <ThemeProvider><OrdersProvider><AppInner/></OrdersProvider></ThemeProvider>;
+}
+
+// ── NAV ───────────────────────────────────────────────────────────────────────
+function Nav({page,setPage}) {
+  const {dark,setDark} = useContext(ThemeCtx);
+  const tabs = [{id:'dashboard',e:'📊',l:'Дашборд'},{id:'queue',e:'📋',l:'Черга'},{id:'calculator',e:'🧮',l:'Калькулятор'},{id:'instructions',e:'📖',l:'Довідник'}];
+  return (
+    <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 sticky top-0 z-50">
+      <div className="max-w-7xl mx-auto px-3 h-14 flex items-center justify-between">
+        <span className="font-bold text-blue-600 dark:text-blue-400">
+          <span className="hidden sm:inline">🖨 Шовкотрафарет</span>
+          <span className="sm:hidden">🖨</span>
+        </span>
+        <nav className="flex gap-1">
+          {tabs.map(t=>(
+            <button key={t.id} onClick={()=>setPage(t.id)}
+              className={`px-2 sm:px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${page===t.id?'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300':'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'}`}>
+              <span className="hidden sm:inline">{t.e} {t.l}</span>
+              <span className="sm:hidden text-lg">{t.e}</span>
+            </button>
+          ))}
+        </nav>
+        <button onClick={()=>setDark(!dark)} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+          {dark?'☀️':'🌙'}
+        </button>
+      </div>
+    </header>
+  );
+}
+
+// ── DASHBOARD ─────────────────────────────────────────────────────────────────
+function Dashboard() {
+  const {orders} = useContext(OrdersCtx);
+  const today = todayStr();
+  const tomorrow = addWD(today,1);
+
+  const d = new Date(today+'T12:00:00');
+  const diff = d.getDay()===0?-6:1-d.getDay();
+  const wMon = new Date(d); wMon.setDate(d.getDate()+diff);
+  const wSun = new Date(wMon); wSun.setDate(wMon.getDate()+6);
+  const ws = wMon.toISOString().split('T')[0];
+  const we = wSun.toISOString().split('T')[0];
+
+  const rollsOn  = dt => orders.filter(o=>o.autoStart===dt&&o.status!=='issued').reduce((s,o)=>s+(o.rolls||0),0);
+  const rollsWk  = orders.filter(o=>o.autoStart>=ws&&o.autoStart<=we&&o.status!=='issued').reduce((s,o)=>s+(o.rolls||0),0);
+  const active   = orders.filter(o=>o.status!=='issued').length;
+  const urgent   = orders.filter(o=>{ const dl=o.confirmedReadyDate||o.autoEnd; return (dl===today||dl===tomorrow)&&o.status!=='issued'&&o.status!=='ready'; });
+  const inProg   = orders.filter(o=>o.status==='in_progress');
+
+  const clr = v=>v>80?'bg-red-400':v>60?'bg-yellow-400':'bg-blue-400';
+
+  return (
+    <div className="space-y-5">
+      <h1 className="text-2xl font-bold">Дашборд</h1>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {[
+          {l:'Прокатів сьогодні', v:rollsOn(today),    max:CAP,    c:'blue'},
+          {l:'Прокатів завтра',   v:rollsOn(tomorrow), max:CAP,    c:'indigo'},
+          {l:'Прокатів тижня',    v:rollsWk,           max:CAP*5,  c:'purple'},
+          {l:'Активних замовлень',v:active,             max:null,   c:'emerald'},
+        ].map(({l,v,max,c})=>{
+          const pct = max ? Math.min(100,Math.round(v/max*100)) : null;
+          const colors = {blue:'bg-blue-50 dark:bg-blue-950 border-blue-200 dark:border-blue-800',indigo:'bg-indigo-50 dark:bg-indigo-950 border-indigo-200 dark:border-indigo-800',purple:'bg-purple-50 dark:bg-purple-950 border-purple-200 dark:border-purple-800',emerald:'bg-emerald-50 dark:bg-emerald-950 border-emerald-200 dark:border-emerald-800'};
+          const bar = {blue:clr(pct),indigo:clr(pct),purple:clr(pct),emerald:'bg-emerald-400'};
+          return (
+            <div key={l} className={`rounded-xl border p-4 ${colors[c]}`}>
+              <p className="text-xs text-gray-500 dark:text-gray-400">{l}</p>
+              <p className="text-3xl font-bold mt-1">{v}</p>
+              {max && <p className="text-xs text-gray-400 mt-0.5">з {max}</p>}
+              {pct!==null && <div className="mt-2 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all ${bar[c]}`} style={{width:`${pct}%`}}/></div>}
+            </div>
+          );
+        })}
+      </div>
+
+      {urgent.length>0 && (
+        <div className="bg-red-50 dark:bg-red-950 border border-red-300 dark:border-red-800 rounded-xl p-4">
+          <h2 className="font-bold text-red-700 dark:text-red-400 mb-3">🚨 Термінові — дедлайн сьогодні або завтра</h2>
+          <div className="grid sm:grid-cols-2 gap-2">
+            {urgent.map(o=>(
+              <div key={o.id} className="bg-white dark:bg-gray-800 rounded-lg p-3 border border-red-200 dark:border-red-700">
+                <div className="flex justify-between"><span className="font-semibold">{o.client}</span>
+                  <span className="text-xs bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 px-2 py-0.5 rounded">{fmtD(o.confirmedReadyDate||o.autoEnd)}</span>
+                </div>
+                <p className="text-sm text-gray-500 mt-1">{o.rolls} прок. · {o.items}шт × {o.colors}кол. · {STATUSES[o.status]}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {inProg.length>0 && (
+        <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-xl p-4">
+          <h2 className="font-bold text-blue-700 dark:text-blue-400 mb-3">⚙️ Зараз у виробництві</h2>
+          <div className="grid sm:grid-cols-2 gap-2">
+            {inProg.map(o=>(
+              <div key={o.id} className="bg-white dark:bg-gray-800 rounded-lg p-3 border border-blue-200 dark:border-blue-700">
+                <div className="flex justify-between"><span className="font-semibold">{o.client}</span>
+                  <span className="text-xs text-blue-600 dark:text-blue-400">{fmtD(o.confirmedReadyDate||o.autoEnd)}</span>
+                </div>
+                <p className="text-sm text-gray-500 mt-1">{o.rolls} прок. · {INK_TYPES[o.inkType]?.label||'—'} · {POSITIONS[o.printPosition]||'—'}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {urgent.length===0 && (
+        <div className="bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-xl p-3 text-center">
+          <p className="text-green-700 dark:text-green-400 text-sm">✅ Термінових замовлень немає</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── QUEUE ─────────────────────────────────────────────────────────────────────
+function Queue() {
+  const {orders,addOrder,updateOrder,deleteOrder} = useContext(OrdersCtx);
+  const [modal,setModal] = useState(null);
+
+  const sorted = useMemo(()=>{
+    const sm={accepted:0,in_progress:1,ready:2,issued:3};
+    const pm={urgent:0,week:1,queue:2};
+    return [...orders].sort((a,b)=>{
+      if (sm[a.status]!==sm[b.status]) return sm[a.status]-sm[b.status];
+      if ((pm[a.priority]??2)!==(pm[b.priority]??2)) return (pm[a.priority]??2)-(pm[b.priority]??2);
+      return new Date(a.createdAt)-new Date(b.createdAt);
+    });
+  },[orders]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <h1 className="text-2xl font-bold">Черга замовлень</h1>
+        <button onClick={()=>setModal({order:null})} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition-colors">
+          + Додати замовлення
+        </button>
+      </div>
+
+      <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-700">
+        <table className="w-full text-sm whitespace-nowrap">
+          <thead>
+            <tr className="bg-gray-100 dark:bg-gray-800 text-xs text-gray-500 dark:text-gray-400">
+              {['#','CRM','Клієнт','Пріоритет','Статус','Вир.','Кол.','Прок.','Розр.','Прод.','Файл','Фарба','Поз.','Початок','Готовн.','Підтв. дата','Примітки',''].map((h,i)=>(
+                <th key={i} className="px-2 py-2 font-medium text-left">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.length===0 && (
+              <tr><td colSpan="18" className="px-4 py-10 text-center text-gray-400 text-sm">
+                Замовлень немає. Натисніть «+ Додати замовлення».
+              </td></tr>
+            )}
+            {sorted.map((o,i)=>(
+              <QRow key={o.id} o={o} idx={i+1}
+                onEdit={()=>setModal({order:o})}
+                onDel={()=>{ if(confirm('Видалити замовлення?')) deleteOrder(o.id); }}
+                onChange={u=>updateOrder(o.id,u)}/>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {modal && (
+        <Modal order={modal.order} onClose={()=>setModal(null)}
+          onSave={d=>{ modal.order?updateOrder(modal.order.id,d):addOrder(d); setModal(null); }}/>
+      )}
+    </div>
+  );
+}
+
+function QRow({o,idx,onEdit,onDel,onChange}) {
+  const bg = {urgent:'bg-red-50 dark:bg-red-950/40',week:'bg-yellow-50 dark:bg-yellow-950/40',queue:'bg-green-50 dark:bg-green-950/40'}[o.priority]||'';
+  const stBorder = {in_progress:'border-blue-400 text-blue-700 dark:text-blue-300',ready:'border-green-400 text-green-700 dark:text-green-300',issued:'border-gray-300 text-gray-400',accepted:'border-gray-300'}[o.status]||'border-gray-300';
+  return (
+    <tr className={`border-t border-gray-200 dark:border-gray-700 hover:brightness-95 dark:hover:brightness-110 transition-all ${bg}`}>
+      <td className="px-2 py-1.5 text-gray-400 text-xs">{idx}</td>
+      <td className="px-2 py-1.5 font-mono text-xs text-gray-500">{o.keycrmId||'—'}</td>
+      <td className="px-2 py-1.5 font-medium">{o.client}</td>
+      <td className="px-2 py-1.5">
+        <select value={o.priority} onChange={e=>onChange({priority:e.target.value})} className="text-xs bg-transparent border-0 p-0 cursor-pointer focus:outline-none">
+          {Object.entries(PRIORITIES).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+        </select>
+      </td>
+      <td className="px-2 py-1.5">
+        <select value={o.status} onChange={e=>onChange({status:e.target.value})} className={`text-xs border rounded px-1 py-0.5 cursor-pointer focus:outline-none bg-white dark:bg-gray-700 ${stBorder}`}>
+          {Object.entries(STATUSES).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+        </select>
+      </td>
+      <td className="px-2 py-1.5 text-right">{o.items}</td>
+      <td className="px-2 py-1.5 text-right">{o.colors}</td>
+      <td className="px-2 py-1.5 text-right font-semibold text-blue-600 dark:text-blue-400">{o.rolls}</td>
+      <td className="px-2 py-1.5 text-center">{o.isNewDesign?'✓':'—'}</td>
+      <td className="px-2 py-1.5 text-center">{o.hasProduct?<span className="text-green-600">✓</span>:<span className="text-orange-500 text-xs">{fmtDs(o.expectedProductDate)}</span>}</td>
+      <td className="px-2 py-1.5 text-center">{o.fileReceived?<span className="text-green-600 text-xs">✓</span>:<span className="text-red-500 text-xs">⏳</span>}</td>
+      <td className="px-2 py-1.5 text-xs text-gray-500">{INK_TYPES[o.inkType]?.label||'—'}</td>
+      <td className="px-2 py-1.5 text-xs text-gray-500">{POSITIONS[o.printPosition]||'—'}</td>
+      <td className="px-2 py-1.5 text-xs">{fmtD(o.autoStart)}</td>
+      <td className="px-2 py-1.5 text-xs">{fmtD(o.autoEnd)}</td>
+      <td className="px-2 py-1.5">
+        <input type="date" value={o.confirmedReadyDate||''} onChange={e=>onChange({confirmedReadyDate:e.target.value})}
+          className="text-xs bg-transparent border-b border-dashed border-gray-400 dark:border-gray-500 w-28 focus:outline-none focus:border-blue-500"/>
+      </td>
+      <td className="px-2 py-1.5 max-w-[100px] truncate text-xs text-gray-400" title={o.notes}>{o.notes||'—'}</td>
+      <td className="px-2 py-1.5">
+        <div className="flex gap-1">
+          <button onClick={onEdit} className="p-1 hover:bg-black/10 dark:hover:bg-white/10 rounded text-sm" title="Редагувати">✏️</button>
+          <button onClick={onDel}  className="p-1 hover:bg-black/10 dark:hover:bg-white/10 rounded text-sm" title="Видалити">🗑️</button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+// ── MODAL ─────────────────────────────────────────────────────────────────────
+function Modal({order,onClose,onSave}) {
+  const [f,setF] = useState({
+    keycrmId: order?.keycrmId||'', client: order?.client||'',
+    priority: order?.priority||'queue', status: order?.status||'accepted',
+    items: order?.items||'', colors: order?.colors||'',
+    isNewDesign: order?.isNewDesign||false,
+    hasProduct:  order?.hasProduct!==false,
+    expectedProductDate: order?.expectedProductDate||'',
+    fileReceived: order?.fileReceived!==false,
+    inkType: order?.inkType||'plastisol',
+    printPosition: order?.printPosition||'front',
+    confirmedReadyDate: order?.confirmedReadyDate||'',
+    notes: order?.notes||'',
+  });
+  const u = k => v => setF(p=>({...p,[k]:v}));
+  const rolls = (parseInt(f.items)||0)*(parseInt(f.colors)||0);
+  const days  = rolls>0 ? Math.ceil(rolls/CAP)+(f.isNewDesign?1:0) : 0;
+
+  function submit(e) {
+    e.preventDefault();
+    if (!f.client.trim()) return alert('Вкажіть клієнта');
+    if (!f.items||!f.colors) return alert('Вкажіть кількість виробів та кольорів');
+    onSave({...f, items:parseInt(f.items)||0, colors:parseInt(f.colors)||0});
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-lg max-h-[92vh] overflow-y-auto">
+        <div className="sticky top-0 bg-white dark:bg-gray-800 px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
+          <h2 className="text-lg font-bold">{order?'Редагувати замовлення':'Нове замовлення'}</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none">✕</button>
+        </div>
+        <form onSubmit={submit} className="px-6 py-4 space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <FL label="ID KeyCRM"><input className="inp" value={f.keycrmId} onChange={e=>u('keycrmId')(e.target.value)} placeholder="123456"/></FL>
+            <FL label="Клієнт *"><input className="inp" value={f.client} onChange={e=>u('client')(e.target.value)} placeholder="Назва / ПІБ" required/></FL>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <FL label="Пріоритет">
+              <select className="inp" value={f.priority} onChange={e=>u('priority')(e.target.value)}>
+                {Object.entries(PRIORITIES).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+              </select>
+            </FL>
+            <FL label="Статус">
+              <select className="inp" value={f.status} onChange={e=>u('status')(e.target.value)}>
+                {Object.entries(STATUSES).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+              </select>
+            </FL>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <FL label="Виробів *"><input className="inp" type="number" min="1" value={f.items} onChange={e=>u('items')(e.target.value)} placeholder="100" required/></FL>
+            <FL label="Кольорів *"><input className="inp" type="number" min="1" value={f.colors} onChange={e=>u('colors')(e.target.value)} placeholder="3" required/></FL>
+            <FL label="Прокатів"><div className="inp bg-gray-50 dark:bg-gray-700 font-bold text-blue-600 dark:text-blue-400">{rolls}</div></FL>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <FL label="Тип фарби">
+              <select className="inp" value={f.inkType} onChange={e=>u('inkType')(e.target.value)}>
+                {Object.entries(INK_TYPES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+              </select>
+            </FL>
+            <FL label="Позиція друку">
+              <select className="inp" value={f.printPosition} onChange={e=>u('printPosition')(e.target.value)}>
+                {Object.entries(POSITIONS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+              </select>
+            </FL>
+          </div>
+          {f.inkType && <p className="text-xs text-blue-600 dark:text-blue-400 -mt-1 px-1">ℹ️ {INK_TYPES[f.inkType]?.note}</p>}
+          <div className="flex flex-wrap gap-4 text-sm">
+            {[['isNewDesign','Нова розробка (+1 день)'],['hasProduct','Продукція є'],['fileReceived','Файл отримано']].map(([k,l])=>(
+              <label key={k} className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={!!f[k]} onChange={e=>u(k)(e.target.checked)} className="w-4 h-4 accent-blue-600"/>
+                {l}
+              </label>
+            ))}
+          </div>
+          {!f.hasProduct && (
+            <FL label="Очікується продукція">
+              <input className="inp" type="date" value={f.expectedProductDate} onChange={e=>u('expectedProductDate')(e.target.value)} min={todayStr()}/>
+            </FL>
+          )}
+          {rolls>0 && (
+            <div className="bg-blue-50 dark:bg-blue-950 rounded-lg p-3 text-sm grid grid-cols-2 gap-2 text-gray-600 dark:text-gray-300">
+              <span>Прокатів:</span><span className="font-semibold text-blue-700 dark:text-blue-300">{rolls}</span>
+              <span>Днів виробництва:</span><span className="font-semibold text-blue-700 dark:text-blue-300">{days}</span>
+            </div>
+          )}
+          <FL label="Підтверджена дата готовності">
+            <input className="inp" type="date" value={f.confirmedReadyDate} onChange={e=>u('confirmedReadyDate')(e.target.value)}/>
+          </FL>
+          <FL label="Примітки">
+            <textarea className="inp" rows="2" value={f.notes} onChange={e=>u('notes')(e.target.value)} placeholder="Додаткова інформація..."/>
+          </FL>
+          <div className="flex gap-3 pt-1">
+            <button type="submit" className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg font-medium transition-colors">{order?'Зберегти':'Додати'}</button>
+            <button type="button" onClick={onClose} className="flex-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 py-2 rounded-lg font-medium transition-colors">Скасувати</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function FL({label,children}) {
+  return <div><label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">{label}</label>{children}</div>;
+}
+
+// ── CALCULATOR ────────────────────────────────────────────────────────────────
+const PRINT_SIZES = {
+  a5:    { label: '≤ A5',    cap: 1000, note: 'до 148×210 мм' },
+  a4:    { label: 'A4',      cap: 500,  note: '210×297 мм' },
+  a3:    { label: 'A3',      cap: 500,  note: '297×420 мм' },
+  large: { label: '> A3',   cap: 200,  note: 'більше A3' },
+};
+
+function Calculator() {
+  const {orders} = useContext(OrdersCtx);
+  const [mode,setMode] = useState('standard'); // 'standard' | 'volume'
+  const [c,setC] = useState({items:'',colors:'',rollsPerItem:'',printSize:'a4',isNewDesign:false,hasProduct:true,expectedProductDate:''});
+  const u = k => v => setC(p=>({...p,[k]:v}));
+
+  const capDay = PRINT_SIZES[c.printSize]?.cap ?? CAP;
+
+  const rolls     = mode==='volume'
+    ? (parseInt(c.items)||0)*(parseInt(c.rollsPerItem)||0)
+    : (parseInt(c.items)||0)*(parseInt(c.colors)||0);
+  const printDays = rolls>0 ? Math.ceil(rolls/capDay) : 0;
+  const days      = printDays+(c.isNewDesign?1:0);
+  const latestEnd = orders.filter(o=>o.status!=='issued'&&o.autoEnd).reduce((m,o)=>maxD(m,o.autoEnd),null);
+  const earliest  = ensureWD(c.hasProduct?todayStr():(c.expectedProductDate||todayStr()));
+  const startDate = latestEnd ? maxD(earliest,addWD(latestEnd,1)) : earliest;
+  const endDate   = rolls>0 ? addWD(startDate,days) : null;
+
+  const refTable = [
+    [500,1,'≤ A5, 500 вир. × 1 кол.'],
+    [1000,2,'≤ A5, 500 вир. × 2 кол.'],
+    [500,1,'A4/A3, 250 вир. × 2 кол.'],
+    [1000,2,'A4/A3, 500 вир. × 2 кол.'],
+    [200,1,'> A3, 200 вир. × 1 кол.'],
+  ];
+
+  return (
+    <div className="space-y-5 max-w-lg">
+      <h1 className="text-2xl font-bold">Калькулятор дат</h1>
+
+      {/* Mode switcher */}
+      <div className="flex gap-2 bg-gray-100 dark:bg-gray-800 rounded-xl p-1">
+        {[['standard','🎨 По кольорах'],['volume','📦 Об\'ємний']].map(([m,l])=>(
+          <button key={m} onClick={()=>setMode(m)}
+            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${mode===m?'bg-white dark:bg-gray-700 shadow text-blue-600 dark:text-blue-400':'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5 space-y-4">
+        {/* Print size selector */}
+        <FL label="Розмір принту">
+          <div className="grid grid-cols-4 gap-1">
+            {Object.entries(PRINT_SIZES).map(([k,s])=>(
+              <button key={k} type="button" onClick={()=>u('printSize')(k)}
+                className={`py-2 rounded-lg text-xs font-medium border transition-colors ${c.printSize===k?'bg-blue-600 border-blue-600 text-white':'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-blue-400'}`}>
+                <div>{s.label}</div>
+                <div className="font-normal opacity-70">{s.cap}/день</div>
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-gray-400 mt-1">📐 {PRINT_SIZES[c.printSize]?.note} — потужність: <span className="font-semibold text-blue-500">{capDay} прокатів/день</span></p>
+        </FL>
+
+        {mode==='standard' ? (
+          <div className="grid grid-cols-2 gap-4">
+            <FL label="Кількість виробів"><input className="inp" type="number" min="1" value={c.items} onChange={e=>u('items')(e.target.value)} placeholder="100"/></FL>
+            <FL label="Кількість кольорів"><input className="inp" type="number" min="1" value={c.colors} onChange={e=>u('colors')(e.target.value)} placeholder="3"/></FL>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-4">
+              <FL label="Кількість виробів"><input className="inp" type="number" min="1" value={c.items} onChange={e=>u('items')(e.target.value)} placeholder="300"/></FL>
+              <FL label="Прокатів на виріб"><input className="inp" type="number" min="1" value={c.rollsPerItem} onChange={e=>u('rollsPerItem')(e.target.value)} placeholder="5"/></FL>
+            </div>
+            {c.items && c.rollsPerItem && (
+              <div className="bg-gray-50 dark:bg-gray-700 rounded-lg px-4 py-3 text-sm font-mono">
+                <span className="text-gray-500">{c.items} вир. × {c.rollsPerItem} прок. = </span>
+                <span className="text-blue-600 dark:text-blue-400 font-bold text-lg">{rolls} прокатів</span>
+              </div>
+            )}
+          </>
+        )}
+        <div className="flex flex-wrap gap-4 text-sm">
+          {[['isNewDesign','Нова розробка (+1 день)'],['hasProduct','Продукція є']].map(([k,l])=>(
+            <label key={k} className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={!!c[k]} onChange={e=>u(k)(e.target.checked)} className="w-4 h-4 accent-blue-600"/>
+              {l}
+            </label>
+          ))}
+        </div>
+        {!c.hasProduct && (
+          <FL label="Очікувана дата надходження">
+            <input className="inp" type="date" value={c.expectedProductDate} onChange={e=>u('expectedProductDate')(e.target.value)} min={todayStr()}/>
+          </FL>
+        )}
+      </div>
+
+      {rolls>0 ? (
+        <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-xl p-5 space-y-4">
+          <h2 className="font-bold text-blue-800 dark:text-blue-300 text-lg">Результат</h2>
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              {l:'Прокатів всього',     v:rolls},
+              {l:'Днів на друк',        v:printDays},
+              ...(c.isNewDesign ? [{l:'+ Підготовка трафаретів',v:'1 день'}] : []),
+              {l:'Всього робочих днів', v:days},
+              {l:'Дата початку',        v:fmtD(startDate)},
+              {l:'Дата готовності',     v:endDate?fmtD(endDate):'—', hi:true},
+            ].map(({l,v,hi})=>(
+              <div key={l} className={`rounded-lg p-3 ${hi?'bg-blue-100 dark:bg-blue-900':'bg-white dark:bg-gray-800'}`}>
+                <p className="text-xs text-gray-500 dark:text-gray-400">{l}</p>
+                <p className={`text-lg font-bold mt-0.5 ${hi?'text-blue-700 dark:text-blue-300':''}`}>{v}</p>
+              </div>
+            ))}
+          </div>
+          {latestEnd && <p className="text-xs text-blue-500 dark:text-blue-400">⚠️ Черга зайнята до {fmtD(latestEnd)}, початок відкладено відповідно.</p>}
+          <div className="border-t border-blue-200 dark:border-blue-800 pt-3 text-xs text-blue-600 dark:text-blue-400 space-y-0.5">
+            {mode==='volume'
+              ? <p>Формула: {c.items} вир. × {c.rollsPerItem} прок./виріб = {rolls} прок. ÷ {capDay} = {printDays} дн.{c.isNewDesign?' + 1 дн. розробка':''} = {days} дн.</p>
+              : <p>Формула: {c.items} × {c.colors} кол. = {rolls} прок. ÷ {capDay} = {printDays} дн.{c.isNewDesign?' + 1 дн. розробка':''} = {days} дн.</p>
+            }
+            <p>Вихідні (сб/нд) не враховуються</p>
+          </div>
+        </div>
+      ) : (
+        <div className="text-center text-gray-400 py-10">
+          {mode==='volume' ? 'Введіть кількість виробів та прокатів на виріб' : 'Введіть кількість виробів та кольорів'}
+        </div>
+      )}
+
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+        <h3 className="font-semibold mb-3 text-sm">Таблиця потужності</h3>
+        <table className="text-xs w-full">
+          <thead><tr className="text-gray-500 border-b border-gray-200 dark:border-gray-700">
+            <th className="text-left py-1">Розмір</th><th className="text-left py-1">Прок./день</th><th className="text-left py-1">Приклад за день</th>
+          </tr></thead>
+          <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+            {Object.entries(PRINT_SIZES).map(([k,s])=>(
+              <tr key={k} className={c.printSize===k?'bg-blue-50 dark:bg-blue-950/40':''}>
+                <td className="py-1.5 font-medium">{s.label}</td>
+                <td className="py-1.5 text-blue-600 dark:text-blue-400 font-semibold">{s.cap}</td>
+                <td className="py-1.5 text-gray-400">{s.note}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── INSTRUCTIONS ──────────────────────────────────────────────────────────────
+function Instructions() {
+  const [tab,setTab] = useState('system');
+  const tabs = [{id:'system',e:'⚙️',l:'Система'},{id:'tech',e:'🖨',l:'Технологія'},{id:'inks',e:'🎨',l:'Фарби'},{id:'files',e:'📐',l:'Макети'},{id:'checklist',e:'✅',l:'Чекліст'}];
+  return (
+    <div className="space-y-4 max-w-2xl">
+      <h1 className="text-2xl font-bold">Довідник</h1>
+      <div className="flex flex-wrap gap-2">
+        {tabs.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${tab===t.id?'bg-blue-600 text-white':'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}>
+            {t.e} {t.l}
+          </button>
+        ))}
+      </div>
+      <div>
+        {tab==='system'    && <TabSystem/>}
+        {tab==='tech'      && <TabTech/>}
+        {tab==='inks'      && <TabInks/>}
+        {tab==='files'     && <TabFiles/>}
+        {tab==='checklist' && <TabChecklist/>}
+      </div>
+    </div>
+  );
+}
+
+function Sec({title,items}) {
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5 mb-4">
+      <h2 className="font-bold text-lg text-blue-700 dark:text-blue-400 mb-3">{title}</h2>
+      <ul className="space-y-1.5">
+        {items.map((it,i)=>(
+          <li key={i} className="flex gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <span className="text-blue-400 shrink-0 mt-0.5">•</span>{it}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function TabSystem() {
+  return (
+    <div>
+      <Sec title="1. Додавання замовлення" items={['Перейдіть до «Черга» → «+ Додати замовлення»','Введіть ID KeyCRM та ім\'я клієнта','Оберіть пріоритет: 🔴 Терміново / 🟡 Цього тижня / 🟢 В черзі','Введіть кількість виробів та кольорів — прокати розраховуються автоматично','Оберіть тип фарби та позицію друку','Відмітьте «Нова розробка» якщо потрібна підготовка трафаретів (+1 день)','Відмітьте «Продукція є» або вкажіть дату надходження','Відмітьте «Файл отримано» якщо дизайн підтверджено']}/>
+      <Sec title="2. Управління чергою" items={['Статус змінюється прямо в таблиці: Прийнято → В роботі → Готово → Видано','Пріоритет також редагується inline без відкриття форми','Підтверджена дата вводиться в рядку — це дата, яку повідомляєте клієнту','Видані замовлення виключаються з розрахунку черги']}/>
+      <Sec title="3. Логіка розрахунку дат" items={[`Потужність: ${CAP} прокатів/день (робочий день)`,`Прокати = Вироби × Кольори`,`Днів = ⌈Прокати ÷ ${CAP}⌉ + (нова розробка ? 1 : 0)`,'Старт = max(продукція готова, день після завершення попереднього замовлення)','Пріоритет впливає на порядок у черзі — термінові плануються першими','Всі дати у робочих днях (субота, неділя пропускаються)']}/>
+      <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-800 rounded-xl p-4">
+        <h3 className="font-bold text-yellow-800 dark:text-yellow-400 mb-2">💡 Ключові формули</h3>
+        <div className="font-mono text-sm space-y-1 text-yellow-900 dark:text-yellow-300">
+          <div>Прокати = Вироби × Кольори</div>
+          <div>Днів = ⌈Прокати / 375⌉ + (розробка ? 1 : 0)</div>
+          <div>Тижнева потужність = 375 × 5 = 1 875 прокатів</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TabTech() {
+  return (
+    <div>
+      <Sec title="Що таке шовкотрафаретний друк?" items={['Метод нанесення зображення через трафарет (сито) на тканину або інші поверхні','Для кожного кольору готується окреме сито з нанесеною світлочутливою емульсією','Фарба продавлюється через відкриті ділянки трафарету за допомогою ракеля','Результат: стійке, яскраве зображення з відмінною адгезією','Оптимально для тиражів від 20–30 одиниць']}/>
+      <Sec title="Виробничий процес (8 етапів)" items={['1. Підготовка макету — розбивка на кольори, підготовка плівок','2. Виготовлення трафаретів — нанесення емульсії, експонування УФ, промивка','3. Підготовка фарб — змішування, перевірка кольорів за Pantone','4. Налаштування станка — реєстрація кольорів, натяг ракеля, відстань від сита','5. Тестовий відбиток — перевірка кольору, реєстрації та чіткості','6. Тираж — друк з вибірковим контролем кожні 20–30 одиниць','7. Полімеризація — конвеєрна сушка 120–160°C (пластизоль) або 150°C (водна)','8. ВТК + пакування — перевірка якості, сортування по розмірах, упаковка']}/>
+      <Sec title="Типові терміни" items={['Стандартне замовлення: 3–5 робочих днів','З новою розробкою трафаретів: +1–2 дні','Великий тираж (500+ виробів): +1–2 дні','Термінове (наступний день): можливо за доплату','Мінімальний тираж для рентабельності: 20–30 одиниць','Максимальна кількість кольорів: до 6–8 (складність і вартість зростають)']}/>
+    </div>
+  );
+}
+
+function TabInks() {
+  const inks = [
+    {name:'🟢 Пластизольна (Plastisol)', props:['Найпоширеніший тип у текстильному друці','Не висихає на трафареті — ідеальна для тривалих тиражів','Полімеризація: 120–160°C протягом 30–60 сек. у конвеєрній сушці','Яскраві кольори, відмінна укривистість, чіткі краї','Потребує Flash-полімеризації при накладенні кольорів на темні тканини','Дає невеликий рельєф на поверхні тканини']},
+    {name:'💧 Водна (Water-based)', props:['М\'яка на дотик — «вживається» у структуру тканини','Екологічна, без агресивних розчинників','Швидко висихає на трафареті — потрібні паузи для промивки','Найкращий результат на світлих 100% бавовняних тканинах','Полімеризація: 150–160°C','Менша укривистість на темних тканинах']},
+    {name:'🧪 Сольвентна (Solvent-based)', props:['Для синтетичних тканин, поліестеру, нейлону','Висока хімічна та механічна стійкість','Потребує вентиляції при роботі','Самовисихаюча або з каталізатором','Стійка до прання при низьких температурах']},
+    {name:'⚡ Розрядна (Discharge)', props:['Знебарвлює тканину і замінює її колір на колір фарби','Дуже м\'який, «вінтажний» ефект — ніякого рельєфу','Тільки для темних 100% бавовняних тканин','Не всі кольори тканини піддаються розрядці — тест обов\'язковий','Запах при роботі, необхідна вентиляція']},
+    {name:'✨ Спеціальні фарби', props:['Металік / Золото / Срібло — ефект металізованої поверхні','Флуоресцентна — яскрава, видна під UV, підвищений витрати фарби','Глітер — металеві частинки, груба сітка (32–60 lpi)','Пуф (Puff) — при нагріванні спучується, 3D-ефект','Фосфоресцентна — світиться в темряві після освітлення']},
+  ];
+  return (
+    <div className="space-y-3">
+      {inks.map((ink,i)=>(
+        <div key={i} className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+          <h3 className="font-bold mb-2 text-gray-800 dark:text-gray-200">{ink.name}</h3>
+          <ul className="space-y-1">
+            {ink.props.map((p,j)=>(
+              <li key={j} className="flex gap-2 text-sm text-gray-600 dark:text-gray-400">
+                <span className="text-gray-300 shrink-0">→</span>{p}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TabFiles() {
+  return (
+    <div>
+      <Sec title="Вимоги до файлів" items={['Векторні формати: AI, EPS, PDF, SVG — рекомендовано','Растрові: PNG, TIFF — мінімум 300 DPI у реальному розмірі друку','Кожен колір — на окремому шарі або чітко виділений','Мінімальна товщина ліній: 0.5 мм','Мінімальний розмір шрифту: 6pt (серіф), 8pt (без серіф)','Шрифти переведені у криві (Outline / Create Outlines)','Без тіней та ефектів — тільки однотонні заливки','Градієнти тільки через растеризацію в напівтони (halftone)']}/>
+      <Sec title="Щільність сіток (Mesh Count)" items={['32–60 lpi → Глітер, пуф, металік — грубі частинки фарби','60–86 lpi → Товсті пластизольні чорнила, великий тираж','110–160 lpi → Загальне призначення, стандартний текстиль','160–200 lpi → Деталізовані дизайни, тонкі лінії','230–305 lpi → Фотореалістичний друк, напівтони, CMYK']}/>
+      <Sec title="Кольори та Pantone" items={['Макет у Spot Color або CMYK','Для точного відтворення — вказати номер Pantone (PMS)','1 колір = 1 трафарет = 1 прокат на виріб','Рекомендовано до 6–8 кольорів','Білий на темних тканинах = окремий колір (підкладка)']}/>
+      <div className="bg-orange-50 dark:bg-orange-950 border border-orange-200 dark:border-orange-800 rounded-xl p-4">
+        <h3 className="font-bold text-orange-800 dark:text-orange-400 mb-2">⚠️ Часті помилки клієнтів</h3>
+        <ul className="space-y-1">
+          {['Файл у низькій роздільності (72 DPI з веб-сайту)','Шрифти не переведені у криві','Логотип у форматі JPG або PNG з білим фоном','Градієнтна заливка без пояснення (halftone?)','Очікування точного відтворення RGB-кольорів монітора на тканині'].map((e,i)=>(
+            <li key={i} className="flex gap-2 text-sm text-orange-700 dark:text-orange-300">
+              <span className="shrink-0">✗</span>{e}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function TabChecklist() {
+  const [ck,setCk] = useState({});
+  const toggle = k => setCk(p=>({...p,[k]:!p[k]}));
+
+  function CList({title,items,prefix}) {
+    const done = items.filter((_,i)=>ck[`${prefix}-${i}`]).length;
+    const pct  = items.length ? Math.round(done/items.length*100) : 0;
+    return (
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5 mb-4">
+        <div className="flex justify-between items-center mb-1">
+          <h2 className="font-bold text-lg text-blue-700 dark:text-blue-400">{title}</h2>
+          <span className="text-sm text-gray-500">{done}/{items.length}</span>
+        </div>
+        <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full mb-4 overflow-hidden">
+          <div className={`h-full rounded-full transition-all ${pct===100?'bg-green-400':'bg-blue-400'}`} style={{width:`${pct}%`}}/>
+        </div>
+        <ul className="space-y-2">
+          {items.map((item,i)=>{
+            const k=`${prefix}-${i}`;
+            return (
+              <li key={i}>
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input type="checkbox" checked={!!ck[k]} onChange={()=>toggle(k)} className="mt-0.5 w-4 h-4 shrink-0 accent-blue-600"/>
+                  <span className={`text-sm ${ck[k]?'line-through text-gray-400':'text-gray-700 dark:text-gray-300'}`}>{item}</span>
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+        {pct===100&&items.length>0&&<p className="mt-3 text-center text-sm text-green-600 dark:text-green-400 font-medium">✅ Всі пункти виконано!</p>}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">Інтерактивні чеклісти для поточної роботи. Стан скидається при перезавантаженні.</p>
+      <CList title="📋 Прийом замовлення" prefix="ord" items={[
+        'Отримано дизайн-файл від клієнта',
+        'Перевірено формат і роздільність файлу',
+        'Уточнено та затверджено кількість кольорів',
+        'Узгоджено Pantone або надано фізичний зразок кольору',
+        'Підтверджено кількість виробів і розкладку по розмірах',
+        'Підтверджено тип, колір та склад тканини виробу',
+        'Уточнено позицію і розмір друку (в сантиметрах)',
+        'Підтверджено тип фарби (пластизоль / водна / спеціальна)',
+        'Узгоджено терміни і вартість',
+        'Клієнт затвердив мокап (підпис або email)',
+        'Замовлення внесено в систему, дата підтверджена',
+      ]}/>
+      <CList title="🔍 Контроль якості" prefix="qc" items={[
+        'Натяг трафарету перевірено (18–25 N/cm)',
+        'Емульсія нанесена рівномірно, без пропусків і підтікань',
+        'Тестовий відбиток відповідає мокапу',
+        'Реєстрація кольорів точна (суміщення в межах 0.5 мм)',
+        'Колір відповідає еталону / Pantone',
+        'Чіткість країв і дрібних деталей задовільна',
+        'Укривистість фарби достатня, підкладка не просвічує',
+        'Відсутність розмазування, підтікань, ореолів',
+        'Температура сушки правильна (120–160°C для пластизолю)',
+        'Тест на адгезію виконано (стрічка або прання)',
+        'Вибіркова перевірка кожні 30–50 виробів у тиражі',
+        'Фінальний ВТК перед пакуванням',
+        'Вироби відсортовані по розмірах, упаковані',
+      ]}/>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
