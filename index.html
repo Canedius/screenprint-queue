@@ -34,6 +34,14 @@ const { useState, useEffect, useContext, createContext, useCallback, useMemo } =
 
 // ── CONSTANTS ────────────────────────────────────────────────────────────────
 const CAP = 500;
+const HOURS_PER_DAY = 8;
+
+const PRINT_SIZES = {
+  a5:    { label: '≤ A5',  cap: 1000, note: 'до 148×210 мм' },
+  a4:    { label: 'A4',    cap: 500,  note: '210×297 мм' },
+  a3:    { label: 'A3',    cap: 500,  note: '297×420 мм' },
+  large: { label: '> A3', cap: 200,  note: 'більше A3' },
+};
 
 // ── API ───────────────────────────────────────────────────────────────────────
 const BASE = () => (typeof N8N_BASE !== 'undefined' ? N8N_BASE : '');
@@ -63,9 +71,20 @@ const POSITIONS = {
   back:   'Спина',
   sleeve: 'Рукав',
   chest:  'Лівий груд',
-  combo:  'Перед + Спина',
   other:  'Інше',
 };
+
+function posLabel(o) {
+  if (Array.isArray(o.positions) && o.positions.length > 0)
+    return o.positions.map(p => POSITIONS[p.position] || p.position).join(' + ');
+  return POSITIONS[o.printPosition] || '—';
+}
+
+function sumColors(o) {
+  if (Array.isArray(o.positions) && o.positions.length > 0)
+    return o.positions.reduce((s, p) => s + (parseInt(p.colors) || 0), 0);
+  return o.colors || 0;
+}
 
 const PRIORITIES = { urgent: '🔴 Терміново', week: '🟡 Цього тижня', queue: '🟢 В черзі' };
 const STATUSES   = { accepted: 'Прийнято', in_progress: 'В роботі', ready: 'Готово', issued: 'Видано' };
@@ -105,13 +124,21 @@ function recalc(orders) {
   const result = active.map(o=>{
     const earliest = ensureWD(o.hasProduct ? todayStr() : (o.expectedProductDate||todayStr()));
     const start    = tail ? maxD(earliest, addWD(tail,1)) : earliest;
-    const rolls    = (o.items||0)*(o.colors||0);
-    const days     = Math.ceil(rolls/CAP)+(o.isNewDesign?1:0);
+    const rolls    = (o.items||0)*sumColors(o);
+    const totalHours = Array.isArray(o.positions) && o.positions.length > 0
+      ? o.positions.reduce((s,p) => {
+          const cap = PRINT_SIZES[p.printSize]?.cap ?? CAP;
+          const r = (o.items||0)*(parseInt(p.colors)||0);
+          return s + (r>0 ? r*HOURS_PER_DAY/cap : 0);
+        }, 0)
+      : rolls*HOURS_PER_DAY/CAP;
+    const printDays = totalHours>0 ? Math.ceil(totalHours/HOURS_PER_DAY) : 0;
+    const days     = printDays+(o.isNewDesign?1:0);
     const end      = days>0 ? addWD(start,days) : start;
     tail = maxD(tail, end);
     return {...o, autoStart:start, autoEnd:end, rolls};
   });
-  return [...result, ...issued.map(o=>({...o, rolls:(o.items||0)*(o.colors||0)}))];
+  return [...result, ...issued.map(o=>({...o, rolls:(o.items||0)*sumColors(o)}))];
 }
 
 // ── CONTEXT ───────────────────────────────────────────────────────────────────
@@ -323,7 +350,7 @@ function Dashboard() {
                 <div className="flex justify-between"><span className="font-semibold">{o.client}</span>
                   <span className="text-xs text-blue-600 dark:text-blue-400">{fmtD(o.confirmedReadyDate||o.autoEnd)}</span>
                 </div>
-                <p className="text-sm text-gray-500 mt-1">{o.rolls} прок. · {INK_TYPES[o.inkType]?.label||'—'} · {POSITIONS[o.printPosition]||'—'}</p>
+                <p className="text-sm text-gray-500 mt-1">{o.rolls} прок. · {INK_TYPES[o.inkType]?.label||'—'} · {posLabel(o)}</p>
               </div>
             ))}
           </div>
@@ -421,7 +448,7 @@ function QRow({o,idx,onEdit,onDel,onChange}) {
       <td className="px-2 py-1.5 text-center">{o.hasProduct?<span className="text-green-600">✓</span>:<span className="text-orange-500 text-xs">{fmtDs(o.expectedProductDate)}</span>}</td>
       <td className="px-2 py-1.5 text-center">{o.fileReceived?<span className="text-green-600 text-xs">✓</span>:<span className="text-red-500 text-xs">⏳</span>}</td>
       <td className="px-2 py-1.5 text-xs text-gray-500">{INK_TYPES[o.inkType]?.label||'—'}</td>
-      <td className="px-2 py-1.5 text-xs text-gray-500">{POSITIONS[o.printPosition]||'—'}</td>
+      <td className="px-2 py-1.5 text-xs text-gray-500">{posLabel(o)}</td>
       <td className="px-2 py-1.5 text-xs">{fmtD(o.autoStart)}</td>
       <td className="px-2 py-1.5 text-xs">{fmtD(o.autoEnd)}</td>
       <td className="px-2 py-1.5">
@@ -441,28 +468,39 @@ function QRow({o,idx,onEdit,onDel,onChange}) {
 
 // ── MODAL ─────────────────────────────────────────────────────────────────────
 function Modal({order,onClose,onSave}) {
+  const defaultPositions = order?.positions
+    || (order?.printPosition ? [{position:order.printPosition, colors:order.colors||'', printSize:'a4'}]
+                              : [{position:'front', colors:'', printSize:'a4'}]);
   const [f,setF] = useState({
     keycrmId: order?.keycrmId||'', client: order?.client||'',
     priority: order?.priority||'queue', status: order?.status||'accepted',
-    items: order?.items||'', colors: order?.colors||'',
+    items: order?.items||'',
+    positions: defaultPositions,
     isNewDesign: order?.isNewDesign||false,
     hasProduct:  order?.hasProduct!==false,
     expectedProductDate: order?.expectedProductDate||'',
     fileReceived: order?.fileReceived!==false,
     inkType: order?.inkType||'plastisol',
-    printPosition: order?.printPosition||'front',
     confirmedReadyDate: order?.confirmedReadyDate||'',
     notes: order?.notes||'',
   });
   const u = k => v => setF(p=>({...p,[k]:v}));
-  const rolls = (parseInt(f.items)||0)*(parseInt(f.colors)||0);
-  const days  = rolls>0 ? Math.ceil(rolls/CAP)+(f.isNewDesign?1:0) : 0;
+  const totalColors = f.positions.reduce((s,p) => s+(parseInt(p.colors)||0), 0);
+  const rolls = (parseInt(f.items)||0)*totalColors;
+  const totalHours = f.positions.reduce((s,p) => {
+    const cap = PRINT_SIZES[p.printSize||'a4']?.cap ?? CAP;
+    const r = (parseInt(f.items)||0)*(parseInt(p.colors)||0);
+    return s + (r>0 ? r*HOURS_PER_DAY/cap : 0);
+  }, 0);
+  const printDays = totalHours>0 ? Math.ceil(totalHours/HOURS_PER_DAY) : 0;
+  const days = printDays+(f.isNewDesign?1:0);
 
   function submit(e) {
     e.preventDefault();
     if (!f.client.trim()) return alert('Вкажіть клієнта');
-    if (!f.items||!f.colors) return alert('Вкажіть кількість виробів та кольорів');
-    onSave({...f, items:parseInt(f.items)||0, colors:parseInt(f.colors)||0});
+    if (!f.items) return alert('Вкажіть кількість виробів');
+    if (f.positions.some(p=>!p.colors)) return alert('Вкажіть кількість кольорів для кожної позиції');
+    onSave({...f, items:parseInt(f.items)||0, positions:f.positions.map(p=>({...p, colors:parseInt(p.colors)||0}))});
   }
 
   return (
@@ -489,23 +527,43 @@ function Modal({order,onClose,onSave}) {
               </select>
             </FL>
           </div>
-          <div className="grid grid-cols-3 gap-3">
-            <FL label="Виробів *"><input className="inp" type="number" min="1" value={f.items} onChange={e=>u('items')(e.target.value)} placeholder="100" required/></FL>
-            <FL label="Кольорів *"><input className="inp" type="number" min="1" value={f.colors} onChange={e=>u('colors')(e.target.value)} placeholder="3" required/></FL>
-            <FL label="Прокатів"><div className="inp bg-gray-50 dark:bg-gray-700 font-bold text-blue-600 dark:text-blue-400">{rolls}</div></FL>
-          </div>
           <div className="grid grid-cols-2 gap-3">
-            <FL label="Тип фарби">
-              <select className="inp" value={f.inkType} onChange={e=>u('inkType')(e.target.value)}>
-                {Object.entries(INK_TYPES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
-              </select>
-            </FL>
-            <FL label="Позиція друку">
-              <select className="inp" value={f.printPosition} onChange={e=>u('printPosition')(e.target.value)}>
-                {Object.entries(POSITIONS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
-              </select>
-            </FL>
+            <FL label="Виробів *"><input className="inp" type="number" min="1" value={f.items} onChange={e=>u('items')(e.target.value)} placeholder="100" required/></FL>
+            <FL label="Прокатів всього"><div className="inp bg-gray-50 dark:bg-gray-700 font-bold text-blue-600 dark:text-blue-400">{rolls||'—'}</div></FL>
           </div>
+          <FL label="Позиції друку">
+            <div className="space-y-2">
+              <div className="flex gap-1 text-xs text-gray-400 dark:text-gray-500 px-0.5">
+                <span className="flex-1">Місце</span>
+                <span className="w-16 shrink-0 text-center">Кольорів</span>
+                <span className="w-24 shrink-0 text-center">Формат</span>
+                <span className="w-5 shrink-0"/>
+              </div>
+              {f.positions.map((pos,idx)=>{
+                const updatePos = (key,val) => { const ps=[...f.positions]; ps[idx]={...ps[idx],[key]:val}; u('positions')(ps); };
+                return (
+                  <div key={idx} className="flex gap-1 items-center">
+                    <select className="inp flex-1 min-w-0" value={pos.position} onChange={e=>updatePos('position',e.target.value)}>
+                      {Object.entries(POSITIONS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+                    </select>
+                    <input className="inp w-16 shrink-0" type="number" min="1" value={pos.colors} onChange={e=>updatePos('colors',e.target.value)} placeholder="кол."/>
+                    <select className="inp w-24 shrink-0 text-xs" value={pos.printSize||'a4'} onChange={e=>updatePos('printSize',e.target.value)}>
+                      {Object.entries(PRINT_SIZES).map(([k,s])=><option key={k} value={k}>{s.label}</option>)}
+                    </select>
+                    {f.positions.length>1 && (
+                      <button type="button" onClick={()=>u('positions')(f.positions.filter((_,i)=>i!==idx))} className="text-red-400 hover:text-red-600 shrink-0 px-1">✕</button>
+                    )}
+                  </div>
+                );
+              })}
+              <button type="button" onClick={()=>u('positions')([...f.positions,{position:'front',colors:'',printSize:'a4'}])} className="text-sm text-blue-600 dark:text-blue-400 hover:underline">+ Додати позицію</button>
+            </div>
+          </FL>
+          <FL label="Тип фарби">
+            <select className="inp" value={f.inkType} onChange={e=>u('inkType')(e.target.value)}>
+              {Object.entries(INK_TYPES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+            </select>
+          </FL>
           {f.inkType && <p className="text-xs text-blue-600 dark:text-blue-400 -mt-1 px-1">ℹ️ {INK_TYPES[f.inkType]?.note}</p>}
           <div className="flex flex-wrap gap-4 text-sm">
             {[['isNewDesign','Нова розробка (+1 день)'],['hasProduct','Продукція є'],['fileReceived','Файл отримано']].map(([k,l])=>(
@@ -521,9 +579,18 @@ function Modal({order,onClose,onSave}) {
             </FL>
           )}
           {rolls>0 && (
-            <div className="bg-blue-50 dark:bg-blue-950 rounded-lg p-3 text-sm grid grid-cols-2 gap-2 text-gray-600 dark:text-gray-300">
-              <span>Прокатів:</span><span className="font-semibold text-blue-700 dark:text-blue-300">{rolls}</span>
-              <span>Днів виробництва:</span><span className="font-semibold text-blue-700 dark:text-blue-300">{days}</span>
+            <div className="bg-blue-50 dark:bg-blue-950 rounded-lg p-3 text-sm space-y-1 text-gray-600 dark:text-gray-300">
+              {f.positions.map((p,i)=>{
+                const cap=PRINT_SIZES[p.printSize||'a4']?.cap??CAP;
+                const r=(parseInt(f.items)||0)*(parseInt(p.colors)||0);
+                const h=r>0?r*HOURS_PER_DAY/cap:0;
+                return <p key={i} className="text-xs">{POSITIONS[p.position]||p.position}: {r} прок. ({PRINT_SIZES[p.printSize||'a4']?.label}) → {h%1===0?h:h.toFixed(1)} год</p>;
+              })}
+              <div className="grid grid-cols-2 gap-2 pt-1 border-t border-blue-200 dark:border-blue-800 mt-1">
+                <span>Прокатів разом:</span><span className="font-semibold text-blue-700 dark:text-blue-300">{rolls}</span>
+                <span>Годин на друк:</span><span className="font-semibold text-blue-700 dark:text-blue-300">{totalHours%1===0?totalHours:totalHours.toFixed(1)} год</span>
+                <span>Днів виробництва:</span><span className="font-semibold text-blue-700 dark:text-blue-300">{days}</span>
+              </div>
             </div>
           )}
           <FL label="Підтверджена дата готовності">
@@ -547,38 +614,29 @@ function FL({label,children}) {
 }
 
 // ── CALCULATOR ────────────────────────────────────────────────────────────────
-const PRINT_SIZES = {
-  a5:    { label: '≤ A5',    cap: 1000, note: 'до 148×210 мм' },
-  a4:    { label: 'A4',      cap: 500,  note: '210×297 мм' },
-  a3:    { label: 'A3',      cap: 500,  note: '297×420 мм' },
-  large: { label: '> A3',   cap: 200,  note: 'більше A3' },
-};
-
 function Calculator() {
   const {orders} = useContext(OrdersCtx);
   const [mode,setMode] = useState('standard'); // 'standard' | 'volume'
-  const [c,setC] = useState({items:'',colors:'',rollsPerItem:'',printSize:'a4',isNewDesign:false,hasProduct:true,expectedProductDate:''});
+  const [c,setC] = useState({items:'',positions:[{position:'front',colors:'',printSize:'a4'}],rollsPerItem:'',isNewDesign:false,hasProduct:true,expectedProductDate:''});
   const u = k => v => setC(p=>({...p,[k]:v}));
 
-  const capDay = PRINT_SIZES[c.printSize]?.cap ?? CAP;
+  const volRolls  = (parseInt(c.items)||0)*(parseInt(c.rollsPerItem)||0);
+  const stdRolls  = c.positions.reduce((s,p) => s + (parseInt(c.items)||0)*(parseInt(p.colors)||0), 0);
+  const rolls     = mode==='volume' ? volRolls : stdRolls;
 
-  const rolls     = mode==='volume'
-    ? (parseInt(c.items)||0)*(parseInt(c.rollsPerItem)||0)
-    : (parseInt(c.items)||0)*(parseInt(c.colors)||0);
-  const printDays = rolls>0 ? Math.ceil(rolls/capDay) : 0;
+  const totalHours = mode==='volume'
+    ? (volRolls>0 ? volRolls*HOURS_PER_DAY/CAP : 0)
+    : c.positions.reduce((s,p) => {
+        const cap = PRINT_SIZES[p.printSize]?.cap ?? CAP;
+        const r = (parseInt(c.items)||0)*(parseInt(p.colors)||0);
+        return s + (r>0 ? r*HOURS_PER_DAY/cap : 0);
+      }, 0);
+  const printDays = totalHours>0 ? Math.ceil(totalHours/HOURS_PER_DAY) : 0;
   const days      = printDays+(c.isNewDesign?1:0);
   const latestEnd = orders.filter(o=>o.status!=='issued'&&o.autoEnd).reduce((m,o)=>maxD(m,o.autoEnd),null);
   const earliest  = ensureWD(c.hasProduct?todayStr():(c.expectedProductDate||todayStr()));
   const startDate = latestEnd ? maxD(earliest,addWD(latestEnd,1)) : earliest;
   const endDate   = rolls>0 ? addWD(startDate,days) : null;
-
-  const refTable = [
-    [500,1,'≤ A5, 500 вир. × 1 кол.'],
-    [1000,2,'≤ A5, 500 вир. × 2 кол.'],
-    [500,1,'A4/A3, 250 вир. × 2 кол.'],
-    [1000,2,'A4/A3, 500 вир. × 2 кол.'],
-    [200,1,'> A3, 200 вир. × 1 кол.'],
-  ];
 
   return (
     <div className="space-y-5 max-w-lg">
@@ -595,24 +653,40 @@ function Calculator() {
       </div>
 
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5 space-y-4">
-        {/* Print size selector */}
-        <FL label="Розмір принту">
-          <div className="grid grid-cols-4 gap-1">
-            {Object.entries(PRINT_SIZES).map(([k,s])=>(
-              <button key={k} type="button" onClick={()=>u('printSize')(k)}
-                className={`py-2 rounded-lg text-xs font-medium border transition-colors ${c.printSize===k?'bg-blue-600 border-blue-600 text-white':'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-blue-400'}`}>
-                <div>{s.label}</div>
-                <div className="font-normal opacity-70">{s.cap}/день</div>
-              </button>
-            ))}
-          </div>
-          <p className="text-xs text-gray-400 mt-1">📐 {PRINT_SIZES[c.printSize]?.note} — потужність: <span className="font-semibold text-blue-500">{capDay} прокатів/день</span></p>
-        </FL>
-
         {mode==='standard' ? (
-          <div className="grid grid-cols-2 gap-4">
-            <FL label="Кількість виробів"><input className="inp" type="number" min="1" value={c.items} onChange={e=>u('items')(e.target.value)} placeholder="100"/></FL>
-            <FL label="Кількість кольорів"><input className="inp" type="number" min="1" value={c.colors} onChange={e=>u('colors')(e.target.value)} placeholder="3"/></FL>
+          <div className="space-y-3">
+            <FL label="Кількість виробів">
+              <input className="inp" type="number" min="1" value={c.items} onChange={e=>u('items')(e.target.value)} placeholder="100"/>
+            </FL>
+            <FL label="Позиції друку">
+              <div className="space-y-2">
+                <div className="flex gap-1 text-xs text-gray-400 dark:text-gray-500 px-0.5">
+                  <span className="flex-1">Місце</span>
+                  <span className="w-16 shrink-0 text-center">Кольорів</span>
+                  <span className="w-24 shrink-0 text-center">Формат принта</span>
+                  <span className="w-5 shrink-0"/>
+                </div>
+                {c.positions.map((pos,idx)=>{
+                  const updatePos = (key,val) => { const ps=[...c.positions]; ps[idx]={...ps[idx],[key]:val}; u('positions')(ps); };
+                  return (
+                    <div key={idx} className="flex gap-1 items-center">
+                      <select className="inp flex-1 min-w-0" value={pos.position} onChange={e=>updatePos('position',e.target.value)}>
+                        {Object.entries(POSITIONS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+                      </select>
+                      <input className="inp w-16 shrink-0" type="number" min="1" value={pos.colors} onChange={e=>updatePos('colors',e.target.value)} placeholder="кол."/>
+                      <select className="inp w-24 shrink-0 text-xs" value={pos.printSize||'a4'} onChange={e=>updatePos('printSize',e.target.value)}>
+                        {Object.entries(PRINT_SIZES).map(([k,s])=><option key={k} value={k}>{s.label}</option>)}
+                      </select>
+                      {c.positions.length>1 && (
+                        <button type="button" onClick={()=>u('positions')(c.positions.filter((_,i)=>i!==idx))} className="text-red-400 hover:text-red-600 shrink-0 px-1">✕</button>
+                      )}
+                    </div>
+                  );
+                })}
+                <button type="button" onClick={()=>u('positions')([...c.positions,{position:'front',colors:'',printSize:'a4'}])} className="text-sm text-blue-600 dark:text-blue-400 hover:underline">+ Додати позицію</button>
+              </div>
+              <p className="text-xs text-gray-400 mt-1">Кожна позиція — окремий прогін. Дні сумуються.</p>
+            </FL>
           </div>
         ) : (
           <>
@@ -649,8 +723,8 @@ function Calculator() {
           <div className="grid grid-cols-2 gap-3">
             {[
               {l:'Прокатів всього',     v:rolls},
-              {l:'Днів на друк',        v:printDays},
-              ...(c.isNewDesign ? [{l:'+ Підготовка трафаретів',v:'1 день'}] : []),
+              {l:'Годин на друк',       v:`${totalHours%1===0?totalHours:totalHours.toFixed(1)} год`},
+              ...(c.isNewDesign ? [{l:'+ Підготовка трафаретів',v:'1 день (8 год)'}] : []),
               {l:'Всього робочих днів', v:days},
               {l:'Дата початку',        v:fmtD(startDate)},
               {l:'Дата готовності',     v:endDate?fmtD(endDate):'—', hi:true},
@@ -664,8 +738,16 @@ function Calculator() {
           {latestEnd && <p className="text-xs text-blue-500 dark:text-blue-400">⚠️ Черга зайнята до {fmtD(latestEnd)}, початок відкладено відповідно.</p>}
           <div className="border-t border-blue-200 dark:border-blue-800 pt-3 text-xs text-blue-600 dark:text-blue-400 space-y-0.5">
             {mode==='volume'
-              ? <p>Формула: {c.items} вир. × {c.rollsPerItem} прок./виріб = {rolls} прок. ÷ {capDay} = {printDays} дн.{c.isNewDesign?' + 1 дн. розробка':''} = {days} дн.</p>
-              : <p>Формула: {c.items} × {c.colors} кол. = {rolls} прок. ÷ {capDay} = {printDays} дн.{c.isNewDesign?' + 1 дн. розробка':''} = {days} дн.</p>
+              ? <p>Формула: {c.items} вир. × {c.rollsPerItem} прок./виріб = {rolls} прок. → {totalHours.toFixed(1)} год ÷ {HOURS_PER_DAY} год/день = {days} дн.</p>
+              : <div className="space-y-0.5">
+                  {c.positions.map((p,i)=>{
+                    const cap=PRINT_SIZES[p.printSize||'a4']?.cap??CAP;
+                    const r=(parseInt(c.items)||0)*(parseInt(p.colors)||0);
+                    const h=r>0?r*HOURS_PER_DAY/cap:0;
+                    return <p key={i}>{POSITIONS[p.position]||p.position}: {c.items} × {p.colors||0} кол. = {r} прок. → {h%1===0?h:h.toFixed(1)} год</p>;
+                  })}
+                  <p className="font-semibold">Разом: {totalHours%1===0?totalHours:totalHours.toFixed(1)} год ÷ {HOURS_PER_DAY} год/день = {printDays} дн.{c.isNewDesign?' + 1 дн. розробка':''} = {days} дн.</p>
+                </div>
             }
             <p>Вихідні (сб/нд) не враховуються</p>
           </div>
@@ -683,13 +765,16 @@ function Calculator() {
             <th className="text-left py-1">Розмір</th><th className="text-left py-1">Прок./день</th><th className="text-left py-1">Приклад за день</th>
           </tr></thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-            {Object.entries(PRINT_SIZES).map(([k,s])=>(
-              <tr key={k} className={c.printSize===k?'bg-blue-50 dark:bg-blue-950/40':''}>
-                <td className="py-1.5 font-medium">{s.label}</td>
-                <td className="py-1.5 text-blue-600 dark:text-blue-400 font-semibold">{s.cap}</td>
-                <td className="py-1.5 text-gray-400">{s.note}</td>
-              </tr>
-            ))}
+            {Object.entries(PRINT_SIZES).map(([k,s])=>{
+              const used = mode==='standard' && c.positions.some(p=>(p.printSize||'a4')===k);
+              return (
+                <tr key={k} className={used?'bg-blue-50 dark:bg-blue-950/40':''}>
+                  <td className="py-1.5 font-medium">{s.label}</td>
+                  <td className="py-1.5 text-blue-600 dark:text-blue-400 font-semibold">{s.cap}</td>
+                  <td className="py-1.5 text-gray-400">{s.note}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
