@@ -625,7 +625,7 @@ function Calculator() {
   const rolls     = mode==='volume' ? volRolls : stdRolls;
 
   const totalHours = mode==='volume'
-    ? (volRolls>0 ? volRolls*HOURS_PER_DAY/CAP : 0)
+    ? (volRolls>0 ? volRolls*HOURS_PER_DAY/(PRINT_SIZES[c.printSize||'a4']?.cap??CAP) : 0)
     : c.positions.reduce((s,p) => {
         const cap = PRINT_SIZES[p.printSize]?.cap ?? CAP;
         const r = (parseInt(c.items)||0)*(parseInt(p.colors)||0);
@@ -694,6 +694,17 @@ function Calculator() {
               <FL label="Кількість виробів"><input className="inp" type="number" min="1" value={c.items} onChange={e=>u('items')(e.target.value)} placeholder="300"/></FL>
               <FL label="Прокатів на виріб"><input className="inp" type="number" min="1" value={c.rollsPerItem} onChange={e=>u('rollsPerItem')(e.target.value)} placeholder="5"/></FL>
             </div>
+            <FL label="Формат принта">
+              <div className="grid grid-cols-4 gap-1">
+                {Object.entries(PRINT_SIZES).map(([k,s])=>(
+                  <button key={k} type="button" onClick={()=>u('printSize')(k)}
+                    className={`py-2 rounded-lg text-xs font-medium border transition-colors ${(c.printSize||'a4')===k?'bg-blue-600 border-blue-600 text-white':'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-blue-400'}`}>
+                    <div>{s.label}</div>
+                    <div className="font-normal opacity-70">{s.cap}/день</div>
+                  </button>
+                ))}
+              </div>
+            </FL>
             {c.items && c.rollsPerItem && (
               <div className="bg-gray-50 dark:bg-gray-700 rounded-lg px-4 py-3 text-sm font-mono">
                 <span className="text-gray-500">{c.items} вир. × {c.rollsPerItem} прок. = </span>
@@ -738,7 +749,7 @@ function Calculator() {
           {latestEnd && <p className="text-xs text-blue-500 dark:text-blue-400">⚠️ Черга зайнята до {fmtD(latestEnd)}, початок відкладено відповідно.</p>}
           <div className="border-t border-blue-200 dark:border-blue-800 pt-3 text-xs text-blue-600 dark:text-blue-400 space-y-0.5">
             {mode==='volume'
-              ? <p>Формула: {c.items} вир. × {c.rollsPerItem} прок./виріб = {rolls} прок. → {totalHours.toFixed(1)} год ÷ {HOURS_PER_DAY} год/день = {days} дн.</p>
+              ? <p>Формула: {c.items} вир. × {c.rollsPerItem} прок./виріб = {rolls} прок. ÷ {PRINT_SIZES[c.printSize||'a4']?.cap??CAP}/день → {totalHours.toFixed(1)} год ÷ {HOURS_PER_DAY} год/день = {days} дн.</p>
               : <div className="space-y-0.5">
                   {c.positions.map((p,i)=>{
                     const cap=PRINT_SIZES[p.printSize||'a4']?.cap??CAP;
