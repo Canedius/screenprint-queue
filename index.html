@@ -30,7 +30,7 @@
 <body class="antialiased">
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useEffect, useContext, createContext, useCallback, useMemo } = React;
+const { useState, useEffect, useContext, createContext, useCallback, useMemo, useRef } = React;
 
 // ── CONSTANTS ────────────────────────────────────────────────────────────────
 const CAP = 500;
@@ -51,8 +51,37 @@ const call = (op, data) => fetch(`${BASE()}/screenprint`, {
   body: JSON.stringify({op, data})
 }).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
 
+function parseOrder(o) {
+  // Розпаковуємо positions і crmData з JSON-рядків (збережених в DataTable)
+  let positions = o.positions;
+  if (typeof positions === 'string') {
+    try { positions = JSON.parse(positions); } catch { positions = []; }
+  }
+  if (!Array.isArray(positions) || positions.length === 0) positions = null;
+
+  let crm = {};
+  if (typeof o.crmData === 'string' && o.crmData) {
+    try { crm = JSON.parse(o.crmData); } catch { crm = {}; }
+  }
+
+  return {
+    ...o,
+    positions: positions || undefined,
+    crmProducts:    crm.products    || o.crmProducts    || [],
+    crmManager:     crm.manager     || o.crmManager     || '',
+    crmPhone:       crm.phone       || o.crmPhone       || '',
+    crmDelivery:    crm.delivery    || o.crmDelivery    || '',
+    crmStatusLabel: crm.statusLabel || o.crmStatusLabel || '',
+    crmTrackingCode:crm.trackingCode|| o.crmTrackingCode|| '',
+    crmReceiveAt:   crm.receiveAt   || o.crmReceiveAt   || '',
+    crmTags:        crm.tags        || o.crmTags        || '',
+    crmTotalPaid:   crm.totalPaid   || o.crmTotalPaid   || 0,
+    crmCurrency:    crm.currency    || o.crmCurrency    || 'UAH',
+  };
+}
+
 const api = {
-  getOrders:   ()     => call('get').then(r => r.orders || []),
+  getOrders:   ()     => call('get').then(r => (r.orders || []).map(parseOrder)),
   createOrder: (d)    => call('create', d),
   updateOrder: (id,d) => call('update', {...d, id}),
   deleteOrder: (id)   => call('delete', {id}),
@@ -390,29 +419,19 @@ function Queue() {
         </button>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-700">
-        <table className="w-full text-sm whitespace-nowrap">
-          <thead>
-            <tr className="bg-gray-100 dark:bg-gray-800 text-xs text-gray-500 dark:text-gray-400">
-              {['#','CRM','Клієнт','Пріоритет','Статус','Вир.','Кол.','Прок.','Розр.','Прод.','Файл','Фарба','Поз.','Початок','Готовн.','Підтв. дата','Примітки',''].map((h,i)=>(
-                <th key={i} className="px-2 py-2 font-medium text-left">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.length===0 && (
-              <tr><td colSpan="18" className="px-4 py-10 text-center text-gray-400 text-sm">
-                Замовлень немає. Натисніть «+ Додати замовлення».
-              </td></tr>
-            )}
-            {sorted.map((o,i)=>(
-              <QRow key={o.id} o={o} idx={i+1}
-                onEdit={()=>setModal({order:o})}
-                onDel={()=>{ if(confirm('Видалити замовлення?')) deleteOrder(o.id); }}
-                onChange={u=>updateOrder(o.id,u)}/>
-            ))}
-          </tbody>
-        </table>
+      {sorted.length===0 && (
+        <div className="text-center text-gray-400 py-16">
+          <p className="text-5xl mb-3">📋</p>
+          <p>Замовлень немає. Натисніть «+ Додати замовлення».</p>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {sorted.map((o,i)=>(
+          <OrderCard key={o.id} o={o} idx={i+1}
+            onDel={()=>{ if(confirm('Видалити замовлення?')) deleteOrder(o.id); }}
+            onChange={u=>updateOrder(o.id,u)}/>
+        ))}
       </div>
 
       {modal && (
@@ -423,51 +442,227 @@ function Queue() {
   );
 }
 
-function QRow({o,idx,onEdit,onDel,onChange}) {
-  const bg = {urgent:'bg-red-50 dark:bg-red-950/40',week:'bg-yellow-50 dark:bg-yellow-950/40',queue:'bg-green-50 dark:bg-green-950/40'}[o.priority]||'';
-  const stBorder = {in_progress:'border-blue-400 text-blue-700 dark:text-blue-300',ready:'border-green-400 text-green-700 dark:text-green-300',issued:'border-gray-300 text-gray-400',accepted:'border-gray-300'}[o.status]||'border-gray-300';
+function OrderCard({o,idx,onDel,onChange}) {
+  const [expanded,setExpanded] = useState(false);
+  const [saving,setSaving] = useState(false);
+  const [edit,setEdit] = useState(null);
+
+  function openExpand() {
+    if (!expanded) {
+      setEdit({
+        positions: o.positions?.length>0 ? o.positions : [{position: o.printPosition||'front', colors: o.colors||'', printSize:'a4'}],
+        inkType: o.inkType||'plastisol',
+        isNewDesign: o.isNewDesign||false,
+        hasProduct: o.hasProduct!==false,
+        expectedProductDate: o.expectedProductDate||'',
+        fileReceived: o.fileReceived!==false,
+        confirmedReadyDate: o.confirmedReadyDate||'',
+        notes: o.notes||'',
+        crmProducts: o.crmProducts||[],
+      });
+    }
+    setExpanded(v=>!v);
+  }
+
+  async function saveEdit() {
+    setSaving(true);
+    await onChange(edit);
+    setSaving(false);
+    setExpanded(false);
+  }
+
+  const prChip = {
+    urgent:'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
+    week:'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/50 dark:text-yellow-300',
+    queue:'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
+  }[o.priority]||'bg-gray-100 text-gray-600';
+
+  const stChip = {
+    accepted:'border-gray-300 text-gray-600 dark:border-gray-600 dark:text-gray-300',
+    in_progress:'border-blue-400 text-blue-700 dark:border-blue-500 dark:text-blue-300',
+    ready:'border-green-400 text-green-700 dark:border-green-500 dark:text-green-300',
+    issued:'border-gray-200 text-gray-400',
+  }[o.status]||'border-gray-300 text-gray-600';
+
+  const prLabels = {urgent:'Терміново',week:'Цього тижня',queue:'В черзі'};
+
   return (
-    <tr className={`border-t border-gray-200 dark:border-gray-700 hover:brightness-95 dark:hover:brightness-110 transition-all ${bg}`}>
-      <td className="px-2 py-1.5 text-gray-400 text-xs">{idx}</td>
-      <td className="px-2 py-1.5 font-mono text-xs text-gray-500">{o.keycrmId||'—'}</td>
-      <td className="px-2 py-1.5 font-medium">{o.client}</td>
-      <td className="px-2 py-1.5">
-        <select value={o.priority} onChange={e=>onChange({priority:e.target.value})} className="text-xs bg-transparent border-0 p-0 cursor-pointer focus:outline-none">
-          {Object.entries(PRIORITIES).map(([k,v])=><option key={k} value={k}>{v}</option>)}
-        </select>
-      </td>
-      <td className="px-2 py-1.5">
-        <select value={o.status} onChange={e=>onChange({status:e.target.value})} className={`text-xs border rounded px-1 py-0.5 cursor-pointer focus:outline-none bg-white dark:bg-gray-700 ${stBorder}`}>
-          {Object.entries(STATUSES).map(([k,v])=><option key={k} value={k}>{v}</option>)}
-        </select>
-      </td>
-      <td className="px-2 py-1.5 text-right">{o.items}</td>
-      <td className="px-2 py-1.5 text-right">{o.colors}</td>
-      <td className="px-2 py-1.5 text-right font-semibold text-blue-600 dark:text-blue-400">{o.rolls}</td>
-      <td className="px-2 py-1.5 text-center">{o.isNewDesign?'✓':'—'}</td>
-      <td className="px-2 py-1.5 text-center">{o.hasProduct?<span className="text-green-600">✓</span>:<span className="text-orange-500 text-xs">{fmtDs(o.expectedProductDate)}</span>}</td>
-      <td className="px-2 py-1.5 text-center">{o.fileReceived?<span className="text-green-600 text-xs">✓</span>:<span className="text-red-500 text-xs">⏳</span>}</td>
-      <td className="px-2 py-1.5 text-xs text-gray-500">{INK_TYPES[o.inkType]?.label||'—'}</td>
-      <td className="px-2 py-1.5 text-xs text-gray-500">{posLabel(o)}</td>
-      <td className="px-2 py-1.5 text-xs">{fmtD(o.autoStart)}</td>
-      <td className="px-2 py-1.5 text-xs">{fmtD(o.autoEnd)}</td>
-      <td className="px-2 py-1.5">
-        <input type="date" value={o.confirmedReadyDate||''} onChange={e=>onChange({confirmedReadyDate:e.target.value})}
-          className="text-xs bg-transparent border-b border-dashed border-gray-400 dark:border-gray-500 w-28 focus:outline-none focus:border-blue-500"/>
-      </td>
-      <td className="px-2 py-1.5 max-w-[100px] truncate text-xs text-gray-400" title={o.notes}>{o.notes||'—'}</td>
-      <td className="px-2 py-1.5">
-        <div className="flex gap-1">
-          <button onClick={onEdit} className="p-1 hover:bg-black/10 dark:hover:bg-white/10 rounded text-sm" title="Редагувати">✏️</button>
-          <button onClick={onDel}  className="p-1 hover:bg-black/10 dark:hover:bg-white/10 rounded text-sm" title="Видалити">🗑️</button>
+    <div className={`bg-white dark:bg-gray-800 rounded-xl border transition-all ${expanded?'border-blue-300 dark:border-blue-600 shadow-lg':'border-gray-200 dark:border-gray-700'}`}>
+      {/* ── Collapsed header ── */}
+      <div className="flex items-center gap-2 px-4 py-3 cursor-pointer select-none" onClick={openExpand}>
+        <span className="text-xs text-gray-400 w-5 shrink-0 text-center">{idx}</span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            {o.keycrmId && <span className="font-mono text-xs text-gray-400 shrink-0">#{o.keycrmId}</span>}
+            <span className="font-semibold truncate">{o.client||'—'}</span>
+          </div>
+          {(o.crmProducts?.length>0) && (
+            <p className="text-xs text-gray-400 truncate mt-0.5">
+              {o.crmProducts.map(p=>`${p.name} ×${p.qty}`).join(' · ')}
+            </p>
+          )}
         </div>
-      </td>
-    </tr>
+        <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+          <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${prChip}`}>{prLabels[o.priority]||o.priority}</span>
+          <select value={o.status} onChange={e=>{e.stopPropagation();onChange({status:e.target.value});}} onClick={e=>e.stopPropagation()}
+            className={`text-xs border rounded px-1.5 py-0.5 cursor-pointer focus:outline-none bg-white dark:bg-gray-700 shrink-0 ${stChip}`}>
+            {Object.entries(STATUSES).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+          </select>
+          {o.items>0 && <span className="text-xs text-gray-500 shrink-0">{o.items} шт</span>}
+          {o.autoStart && <span className="text-xs text-gray-400 shrink-0 hidden sm:inline">{fmtDs(o.autoStart)}→{fmtDs(o.autoEnd)}</span>}
+          <button onClick={e=>{e.stopPropagation();onDel();}} title="Видалити"
+            className="text-gray-300 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400 transition-colors p-1 shrink-0">✕</button>
+          <span className="text-gray-400 text-xs shrink-0">{expanded?'▲':'▼'}</span>
+        </div>
+      </div>
+
+      {/* ── Expanded panel ── */}
+      {expanded && edit && (
+        <div className="border-t border-gray-100 dark:border-gray-700 px-4 py-4 space-y-5">
+
+          {/* Products */}
+          {edit.crmProducts.length>0 && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Товари</p>
+                <p className="text-xs text-gray-400">✕ — видалити зі списку</p>
+              </div>
+              <div className="space-y-2">
+                {edit.crmProducts.map((p,i)=>(
+                  <div key={i} className="flex items-center gap-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl p-2.5 border border-gray-100 dark:border-gray-700">
+                    {p.thumbnail
+                      ? <img src={p.thumbnail} alt={p.name} className="w-14 h-14 object-cover rounded-lg border border-gray-200 dark:border-gray-600 shrink-0"/>
+                      : <div className="w-14 h-14 bg-gray-200 dark:bg-gray-600 rounded-lg shrink-0 flex items-center justify-center text-2xl">📦</div>
+                    }
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium">{p.name}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{p.sku?`SKU: ${p.sku} · `:''}×{p.qty}{p.price>0?` · ${p.price} UAH`:''}</p>
+                    </div>
+                    <button onClick={()=>setEdit(prev=>({...prev,crmProducts:prev.crmProducts.filter((_,j)=>j!==i)}))}
+                      className="text-gray-300 hover:text-red-500 transition-colors shrink-0 p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/30">✕</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* CRM info row */}
+          {(o.crmManager||o.crmPhone||o.crmDelivery||o.crmTrackingCode||o.crmReceiveAt||o.crmTags||o.crmTotalPaid>0) && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900 rounded-xl p-3 text-xs">
+              {o.crmManager    && <span><span className="text-gray-400">Менеджер: </span><span className="font-medium">{o.crmManager}</span></span>}
+              {o.crmPhone      && <span><span className="text-gray-400">Тел: </span><span className="font-medium">{o.crmPhone}</span></span>}
+              {o.crmStatusLabel&& <span><span className="text-gray-400">Статус CRM: </span><span className="font-medium">{o.crmStatusLabel}</span></span>}
+              {o.crmDelivery   && <span><span className="text-gray-400">Доставка: </span><span className="font-medium">{o.crmDelivery}</span></span>}
+              {o.crmTrackingCode&&<span><span className="text-gray-400">ТТН: </span><span className="font-medium">{o.crmTrackingCode}</span></span>}
+              {o.crmReceiveAt  && <span><span className="text-gray-400">Отримання: </span><span className="font-medium">{o.crmReceiveAt}</span></span>}
+              {o.crmTags       && <span className="col-span-full"><span className="text-gray-400">Теги: </span><span className="font-medium">{o.crmTags}</span></span>}
+              {o.crmTotalPaid>0&& <span><span className="text-gray-400">Оплачено: </span><span className="font-medium">{o.crmTotalPaid} {o.crmCurrency||'UAH'}</span></span>}
+            </div>
+          )}
+
+          {/* Production settings */}
+          <div className="space-y-3">
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Виробництво</p>
+            <div className="grid grid-cols-2 gap-3">
+              <FL label="Пріоритет">
+                <select className="inp" value={o.priority} onChange={e=>onChange({priority:e.target.value})}>
+                  {Object.entries(PRIORITIES).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+                </select>
+              </FL>
+              <FL label="Тип фарби">
+                <select className="inp" value={edit.inkType} onChange={e=>setEdit(p=>({...p,inkType:e.target.value}))}>
+                  {Object.entries(INK_TYPES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+                </select>
+              </FL>
+            </div>
+
+            <FL label="Позиції друку">
+              <div className="space-y-2">
+                <div className="flex gap-1 text-xs text-gray-400 dark:text-gray-500 px-0.5">
+                  <span className="flex-1">Місце</span>
+                  <span className="w-16 shrink-0 text-center">Кольорів</span>
+                  <span className="w-24 shrink-0 text-center">Формат принта</span>
+                  <span className="w-5 shrink-0"/>
+                </div>
+                {edit.positions.map((pos,pi)=>{
+                  const upd=(k,v)=>{ const ps=[...edit.positions]; ps[pi]={...ps[pi],[k]:v}; setEdit(p=>({...p,positions:ps})); };
+                  return (
+                    <div key={pi} className="flex gap-1 items-center">
+                      <select className="inp flex-1 min-w-0" value={pos.position} onChange={e=>upd('position',e.target.value)}>
+                        {Object.entries(POSITIONS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+                      </select>
+                      <input className="inp w-16 shrink-0" type="number" min="1" value={pos.colors} onChange={e=>upd('colors',e.target.value)} placeholder="кол."/>
+                      <select className="inp w-24 shrink-0 text-xs" value={pos.printSize||'a4'} onChange={e=>upd('printSize',e.target.value)}>
+                        {Object.entries(PRINT_SIZES).map(([k,s])=><option key={k} value={k}>{s.label}</option>)}
+                      </select>
+                      {edit.positions.length>1 && (
+                        <button type="button" onClick={()=>setEdit(p=>({...p,positions:p.positions.filter((_,j)=>j!==pi)}))}
+                          className="text-red-400 hover:text-red-600 shrink-0 px-1">✕</button>
+                      )}
+                    </div>
+                  );
+                })}
+                <button type="button" onClick={()=>setEdit(p=>({...p,positions:[...p.positions,{position:'front',colors:'',printSize:'a4'}]}))}
+                  className="text-sm text-blue-600 dark:text-blue-400 hover:underline">+ Додати позицію</button>
+              </div>
+            </FL>
+
+            <div className="flex flex-wrap gap-4 text-sm">
+              {[['isNewDesign','Нова розробка (+1 день)'],['hasProduct','Продукція є'],['fileReceived','Файл отримано']].map(([k,l])=>(
+                <label key={k} className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={!!edit[k]} onChange={e=>setEdit(p=>({...p,[k]:e.target.checked}))} className="w-4 h-4 accent-blue-600"/>
+                  {l}
+                </label>
+              ))}
+            </div>
+            {!edit.hasProduct && (
+              <FL label="Очікується продукція">
+                <input className="inp" type="date" value={edit.expectedProductDate} onChange={e=>setEdit(p=>({...p,expectedProductDate:e.target.value}))}/>
+              </FL>
+            )}
+
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+                <p className="text-xs text-gray-400 mb-0.5">Початок (авто)</p>
+                <p className="font-semibold">{fmtD(o.autoStart)||'—'}</p>
+              </div>
+              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+                <p className="text-xs text-gray-400 mb-0.5">Готовність (авто)</p>
+                <p className="font-semibold text-blue-600 dark:text-blue-400">{fmtD(o.autoEnd)||'—'}</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <FL label="Підтверджена дата">
+                <input className="inp" type="date" value={edit.confirmedReadyDate} onChange={e=>setEdit(p=>({...p,confirmedReadyDate:e.target.value}))}/>
+              </FL>
+              <div/>
+            </div>
+
+            <FL label="Примітки">
+              <textarea className="inp" rows="2" value={edit.notes} onChange={e=>setEdit(p=>({...p,notes:e.target.value}))} placeholder="Примітки..."/>
+            </FL>
+          </div>
+
+          <div className="flex gap-2 pt-1">
+            <button onClick={saveEdit} disabled={saving}
+              className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white py-2 rounded-lg font-medium text-sm transition-colors">
+              {saving?'Збереження...':'💾 Зберегти'}
+            </button>
+            <button onClick={()=>setExpanded(false)}
+              className="px-5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 py-2 rounded-lg font-medium text-sm transition-colors">
+              Закрити
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
 // ── MODAL ─────────────────────────────────────────────────────────────────────
 function Modal({order,onClose,onSave}) {
+  const isNew = !order;
   const defaultPositions = order?.positions
     || (order?.printPosition ? [{position:order.printPosition, colors:order.colors||'', printSize:'a4'}]
                               : [{position:'front', colors:'', printSize:'a4'}]);
@@ -477,88 +672,210 @@ function Modal({order,onClose,onSave}) {
     items: order?.items||'',
     positions: defaultPositions,
     isNewDesign: order?.isNewDesign||false,
-    hasProduct:  order?.hasProduct!==false,
+    hasProduct: order?.hasProduct!==false,
     expectedProductDate: order?.expectedProductDate||'',
     fileReceived: order?.fileReceived!==false,
     inkType: order?.inkType||'plastisol',
     confirmedReadyDate: order?.confirmedReadyDate||'',
     notes: order?.notes||'',
+    crmProducts: order?.crmProducts||[],
+    crmManager: order?.crmManager||'',
+    crmPhone: order?.crmPhone||'',
+    crmDelivery: order?.crmDelivery||'',
+    crmStatusLabel: order?.crmStatusLabel||'',
+    crmTrackingCode: order?.crmTrackingCode||'',
+    crmReceiveAt: order?.crmReceiveAt||'',
+    crmTags: order?.crmTags||'',
+    crmTotalPaid: order?.crmTotalPaid||0,
+    crmCurrency: order?.crmCurrency||'UAH',
   });
   const u = k => v => setF(p=>({...p,[k]:v}));
-  const [crmLoading, setCrmLoading] = useState(false);
-  const [crmInfo, setCrmInfo] = useState(null);
+  const [crmLoading,setCrmLoading] = useState(false);
+  const [crmFetched,setCrmFetched] = useState(false);
+  const submittedRef = useRef(false);
 
   async function fetchFromCRM() {
     const id = f.keycrmId.trim();
     if (!id) return alert('Вкажіть ID KeyCRM');
-    setCrmLoading(true); setCrmInfo(null);
+    setCrmLoading(true);
     try {
       const r = await call('crm_fetch', {orderId: id});
       if (r.ok) {
-        setCrmInfo(r);
-        setF(p => ({...p,
-          client: r.client || p.client,
-          notes: r.notes || p.notes,
-          items: r.items || p.items,
+        setCrmFetched(true);
+        setF(p=>({...p,
+          client: r.client||p.client,
+          notes: r.notes||p.notes,
+          items: r.items||p.items,
+          crmProducts: r.products||[],
+          crmManager: r.manager||'',
+          crmPhone: r.phone||'',
+          crmDelivery: r.deliveryService||'',
+          crmStatusLabel: r.statusLabel||'',
+          crmTrackingCode: r.trackingCode||'',
+          crmReceiveAt: r.receiveAt||'',
+          crmTags: r.tags||'',
+          crmTotalPaid: r.totalPaid||0,
+          crmCurrency: r.currency||'UAH',
         }));
       } else { alert('Замовлення не знайдено'); }
     } catch { alert('Помилка запиту до KeyCRM'); }
     finally { setCrmLoading(false); }
   }
 
-  const totalColors = f.positions.reduce((s,p) => s+(parseInt(p.colors)||0), 0);
+  function quickSave() {
+    if (submittedRef.current) return;
+    if (!f.client.trim()) return alert('Не вдалось отримати клієнта з CRM');
+    submittedRef.current = true;
+    onSave({...f, items: parseInt(f.items)||0});
+  }
+
+  // ── Step 1: Enter CRM ID ──
+  if (isNew && !crmFetched) {
+    return (
+      <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={e=>e.target===e.currentTarget&&onClose()}>
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md">
+          <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
+            <h2 className="text-lg font-bold">Нове замовлення</h2>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none">✕</button>
+          </div>
+          <div className="px-6 py-6 space-y-4">
+            <FL label="Номер замовлення KeyCRM">
+              <div className="flex gap-2">
+                <input className="inp flex-1" value={f.keycrmId} onChange={e=>u('keycrmId')(e.target.value)}
+                  placeholder="104499" autoFocus onKeyDown={e=>e.key==='Enter'&&fetchFromCRM()}/>
+                <button type="button" onClick={fetchFromCRM} disabled={crmLoading}
+                  className="shrink-0 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium transition-colors whitespace-nowrap">
+                  {crmLoading ? '...' : '⬇ Завантажити'}
+                </button>
+              </div>
+            </FL>
+            <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
+              <p className="text-xs text-gray-400 mb-3">Або додати вручну без CRM:</p>
+              <FL label="Клієнт">
+                <input className="inp" value={f.client} onChange={e=>u('client')(e.target.value)} placeholder="Назва / ПІБ"/>
+              </FL>
+              {f.client && (
+                <button onClick={quickSave} className="mt-3 w-full bg-gray-600 hover:bg-gray-700 text-white py-2 rounded-lg font-medium text-sm transition-colors">
+                  Додати вручну
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Step 2: Preview after CRM fetch ──
+  if (isNew && crmFetched) {
+    return (
+      <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={e=>e.target===e.currentTarget&&onClose()}>
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-lg max-h-[92vh] overflow-y-auto">
+          <div className="sticky top-0 bg-white dark:bg-gray-800 px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
+            <div>
+              <h2 className="text-lg font-bold">Замовлення #{f.keycrmId}</h2>
+              {f.crmStatusLabel && <p className="text-xs text-indigo-600 dark:text-indigo-400">{f.crmStatusLabel}</p>}
+            </div>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl">✕</button>
+          </div>
+          <div className="px-6 py-4 space-y-4">
+            {/* Client summary */}
+            <div className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-4 space-y-2">
+              <p className="font-semibold text-lg">{f.client}</p>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                {f.crmPhone    && <span>📞 {f.crmPhone}</span>}
+                {f.crmManager  && <span>👤 {f.crmManager}</span>}
+                {f.items>0     && <span>📦 {f.items} виробів</span>}
+                {f.crmDelivery && <span>🚚 {f.crmDelivery}</span>}
+                {f.crmTotalPaid>0 && <span>💳 {f.crmTotalPaid} {f.crmCurrency}</span>}
+                {f.crmTags     && <span>🏷 {f.crmTags}</span>}
+              </div>
+            </div>
+
+            {/* Products list */}
+            {f.crmProducts.length>0 && (
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-sm font-semibold text-gray-600 dark:text-gray-400">Товари <span className="font-normal text-gray-400">({f.crmProducts.length})</span></p>
+                  <p className="text-xs text-gray-400">✕ — видалити зі списку</p>
+                </div>
+                <div className="space-y-2">
+                  {f.crmProducts.map((p,i)=>(
+                    <div key={i} className="flex items-center gap-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl p-2.5 border border-gray-100 dark:border-gray-700">
+                      {p.thumbnail
+                        ? <img src={p.thumbnail} alt={p.name} className="w-14 h-14 object-cover rounded-lg border border-gray-200 dark:border-gray-600 shrink-0"/>
+                        : <div className="w-14 h-14 bg-gray-200 dark:bg-gray-600 rounded-lg shrink-0 flex items-center justify-center text-2xl">📦</div>
+                      }
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium">{p.name}</p>
+                        <p className="text-xs text-gray-400 mt-0.5">{p.sku?`SKU: ${p.sku} · `:''}×{p.qty}{p.price>0?` · ${p.price} ${f.crmCurrency}`:''}</p>
+                      </div>
+                      <button onClick={()=>u('crmProducts')(f.crmProducts.filter((_,j)=>j!==i))}
+                        className="text-gray-300 hover:text-red-500 transition-colors shrink-0 p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/30">✕</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Priority + items */}
+            <div className="grid grid-cols-2 gap-3">
+              <FL label="Пріоритет">
+                <select className="inp" value={f.priority} onChange={e=>u('priority')(e.target.value)}>
+                  {Object.entries(PRIORITIES).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+                </select>
+              </FL>
+              <FL label="Виробів">
+                <input className="inp" type="number" min="1" value={f.items} onChange={e=>u('items')(e.target.value)} placeholder="100"/>
+              </FL>
+            </div>
+
+            <div className="flex gap-3">
+              <button onClick={quickSave}
+                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg font-semibold transition-colors">
+                ✓ Додати до черги
+              </button>
+              <button onClick={onClose}
+                className="px-5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 py-2.5 rounded-lg font-medium transition-colors">
+                Скасувати
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Edit existing order ── (old full form, kept as-is)
+  const totalColors = f.positions.reduce((s,p)=>s+(parseInt(p.colors)||0),0);
   const rolls = (parseInt(f.items)||0)*totalColors;
-  const totalHours = f.positions.reduce((s,p) => {
-    const cap = PRINT_SIZES[p.printSize||'a4']?.cap ?? CAP;
-    const r = (parseInt(f.items)||0)*(parseInt(p.colors)||0);
-    return s + (r>0 ? r*HOURS_PER_DAY/cap : 0);
-  }, 0);
-  const printDays = totalHours>0 ? Math.ceil(totalHours/HOURS_PER_DAY) : 0;
+  const totalHours = f.positions.reduce((s,p)=>{
+    const cap=PRINT_SIZES[p.printSize||'a4']?.cap??CAP;
+    const r=(parseInt(f.items)||0)*(parseInt(p.colors)||0);
+    return s+(r>0?r*HOURS_PER_DAY/cap:0);
+  },0);
+  const printDays = totalHours>0?Math.ceil(totalHours/HOURS_PER_DAY):0;
   const days = printDays+(f.isNewDesign?1:0);
 
   function submit(e) {
     e.preventDefault();
     if (!f.client.trim()) return alert('Вкажіть клієнта');
     if (!f.items) return alert('Вкажіть кількість виробів');
-    if (f.positions.some(p=>!p.colors)) return alert('Вкажіть кількість кольорів для кожної позиції');
-    onSave({...f, items:parseInt(f.items)||0, positions:f.positions.map(p=>({...p, colors:parseInt(p.colors)||0}))});
+    onSave({...f, items:parseInt(f.items)||0, positions:f.positions.map(p=>({...p,colors:parseInt(p.colors)||0}))});
   }
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-lg max-h-[92vh] overflow-y-auto">
         <div className="sticky top-0 bg-white dark:bg-gray-800 px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
-          <h2 className="text-lg font-bold">{order?'Редагувати замовлення':'Нове замовлення'}</h2>
+          <h2 className="text-lg font-bold">Редагувати замовлення</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none">✕</button>
         </div>
         <form onSubmit={submit} className="px-6 py-4 space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <FL label="ID KeyCRM">
-              <div className="flex gap-1">
-                <input className="inp flex-1 min-w-0" value={f.keycrmId} onChange={e=>u('keycrmId')(e.target.value)} placeholder="123456"/>
-                <button type="button" onClick={fetchFromCRM} disabled={crmLoading}
-                  className="shrink-0 px-2 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-medium transition-colors whitespace-nowrap">
-                  {crmLoading ? '...' : '⬇ CRM'}
-                </button>
-              </div>
-            </FL>
+            <FL label="ID KeyCRM"><input className="inp" value={f.keycrmId} onChange={e=>u('keycrmId')(e.target.value)} placeholder="123456"/></FL>
             <FL label="Клієнт *"><input className="inp" value={f.client} onChange={e=>u('client')(e.target.value)} placeholder="Назва / ПІБ" required/></FL>
           </div>
-          {crmInfo && (
-            <div className="bg-indigo-50 dark:bg-indigo-950 border border-indigo-200 dark:border-indigo-800 rounded-lg p-3 text-xs space-y-1 text-gray-700 dark:text-gray-300">
-              <div className="flex flex-wrap gap-x-4 gap-y-1">
-                {crmInfo.statusLabel && <span><span className="text-gray-400">Статус:</span> <span className="font-medium">{crmInfo.statusLabel}</span></span>}
-                {crmInfo.manager    && <span><span className="text-gray-400">Менеджер:</span> <span className="font-medium">{crmInfo.manager}</span></span>}
-                {crmInfo.phone      && <span><span className="text-gray-400">Тел:</span> <span className="font-medium">{crmInfo.phone}</span></span>}
-                {crmInfo.items>0    && <span><span className="text-gray-400">Виробів:</span> <span className="font-medium">{crmInfo.items}</span></span>}
-                {crmInfo.deliveryService && <span><span className="text-gray-400">Доставка:</span> <span className="font-medium">{crmInfo.deliveryService}</span></span>}
-                {crmInfo.trackingCode   && <span><span className="text-gray-400">ТТН:</span> <span className="font-medium">{crmInfo.trackingCode}</span></span>}
-                {crmInfo.receiveAt      && <span><span className="text-gray-400">Отримання:</span> <span className="font-medium">{crmInfo.receiveAt}</span></span>}
-                {crmInfo.tags           && <span><span className="text-gray-400">Теги:</span> <span className="font-medium">{crmInfo.tags}</span></span>}
-              </div>
-              {crmInfo.productsList && <p className="text-gray-500 truncate" title={crmInfo.productsList}>{crmInfo.productsList}</p>}
-            </div>
-          )}
           <div className="grid grid-cols-2 gap-3">
             <FL label="Пріоритет">
               <select className="inp" value={f.priority} onChange={e=>u('priority')(e.target.value)}>
@@ -580,11 +897,11 @@ function Modal({order,onClose,onSave}) {
               <div className="flex gap-1 text-xs text-gray-400 dark:text-gray-500 px-0.5">
                 <span className="flex-1">Місце</span>
                 <span className="w-16 shrink-0 text-center">Кольорів</span>
-                <span className="w-24 shrink-0 text-center">Формат</span>
+                <span className="w-24 shrink-0 text-center">Формат принта</span>
                 <span className="w-5 shrink-0"/>
               </div>
               {f.positions.map((pos,idx)=>{
-                const updatePos = (key,val) => { const ps=[...f.positions]; ps[idx]={...ps[idx],[key]:val}; u('positions')(ps); };
+                const updatePos=(key,val)=>{ const ps=[...f.positions]; ps[idx]={...ps[idx],[key]:val}; u('positions')(ps); };
                 return (
                   <div key={idx} className="flex gap-1 items-center">
                     <select className="inp flex-1 min-w-0" value={pos.position} onChange={e=>updatePos('position',e.target.value)}>
@@ -631,7 +948,6 @@ function Modal({order,onClose,onSave}) {
                 return <p key={i} className="text-xs">{POSITIONS[p.position]||p.position}: {r} прок. ({PRINT_SIZES[p.printSize||'a4']?.label}) → {h%1===0?h:h.toFixed(1)} год</p>;
               })}
               <div className="grid grid-cols-2 gap-2 pt-1 border-t border-blue-200 dark:border-blue-800 mt-1">
-                <span>Прокатів разом:</span><span className="font-semibold text-blue-700 dark:text-blue-300">{rolls}</span>
                 <span>Годин на друк:</span><span className="font-semibold text-blue-700 dark:text-blue-300">{totalHours%1===0?totalHours:totalHours.toFixed(1)} год</span>
                 <span>Днів виробництва:</span><span className="font-semibold text-blue-700 dark:text-blue-300">{days}</span>
               </div>
@@ -644,7 +960,7 @@ function Modal({order,onClose,onSave}) {
             <textarea className="inp" rows="2" value={f.notes} onChange={e=>u('notes')(e.target.value)} placeholder="Додаткова інформація..."/>
           </FL>
           <div className="flex gap-3 pt-1">
-            <button type="submit" className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg font-medium transition-colors">{order?'Зберегти':'Додати'}</button>
+            <button type="submit" className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg font-medium transition-colors">Зберегти</button>
             <button type="button" onClick={onClose} className="flex-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 py-2 rounded-lg font-medium transition-colors">Скасувати</button>
           </div>
         </form>
