@@ -485,6 +485,27 @@ function Modal({order,onClose,onSave}) {
     notes: order?.notes||'',
   });
   const u = k => v => setF(p=>({...p,[k]:v}));
+  const [crmLoading, setCrmLoading] = useState(false);
+  const [crmInfo, setCrmInfo] = useState(null);
+
+  async function fetchFromCRM() {
+    const id = f.keycrmId.trim();
+    if (!id) return alert('Вкажіть ID KeyCRM');
+    setCrmLoading(true); setCrmInfo(null);
+    try {
+      const r = await call('crm_fetch', {orderId: id});
+      if (r.ok) {
+        setCrmInfo(r);
+        setF(p => ({...p,
+          client: r.client || p.client,
+          notes: r.notes || p.notes,
+          items: r.items || p.items,
+        }));
+      } else { alert('Замовлення не знайдено'); }
+    } catch { alert('Помилка запиту до KeyCRM'); }
+    finally { setCrmLoading(false); }
+  }
+
   const totalColors = f.positions.reduce((s,p) => s+(parseInt(p.colors)||0), 0);
   const rolls = (parseInt(f.items)||0)*totalColors;
   const totalHours = f.positions.reduce((s,p) => {
@@ -512,9 +533,32 @@ function Modal({order,onClose,onSave}) {
         </div>
         <form onSubmit={submit} className="px-6 py-4 space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <FL label="ID KeyCRM"><input className="inp" value={f.keycrmId} onChange={e=>u('keycrmId')(e.target.value)} placeholder="123456"/></FL>
+            <FL label="ID KeyCRM">
+              <div className="flex gap-1">
+                <input className="inp flex-1 min-w-0" value={f.keycrmId} onChange={e=>u('keycrmId')(e.target.value)} placeholder="123456"/>
+                <button type="button" onClick={fetchFromCRM} disabled={crmLoading}
+                  className="shrink-0 px-2 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-medium transition-colors whitespace-nowrap">
+                  {crmLoading ? '...' : '⬇ CRM'}
+                </button>
+              </div>
+            </FL>
             <FL label="Клієнт *"><input className="inp" value={f.client} onChange={e=>u('client')(e.target.value)} placeholder="Назва / ПІБ" required/></FL>
           </div>
+          {crmInfo && (
+            <div className="bg-indigo-50 dark:bg-indigo-950 border border-indigo-200 dark:border-indigo-800 rounded-lg p-3 text-xs space-y-1 text-gray-700 dark:text-gray-300">
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                {crmInfo.statusLabel && <span><span className="text-gray-400">Статус:</span> <span className="font-medium">{crmInfo.statusLabel}</span></span>}
+                {crmInfo.manager    && <span><span className="text-gray-400">Менеджер:</span> <span className="font-medium">{crmInfo.manager}</span></span>}
+                {crmInfo.phone      && <span><span className="text-gray-400">Тел:</span> <span className="font-medium">{crmInfo.phone}</span></span>}
+                {crmInfo.items>0    && <span><span className="text-gray-400">Виробів:</span> <span className="font-medium">{crmInfo.items}</span></span>}
+                {crmInfo.deliveryService && <span><span className="text-gray-400">Доставка:</span> <span className="font-medium">{crmInfo.deliveryService}</span></span>}
+                {crmInfo.trackingCode   && <span><span className="text-gray-400">ТТН:</span> <span className="font-medium">{crmInfo.trackingCode}</span></span>}
+                {crmInfo.receiveAt      && <span><span className="text-gray-400">Отримання:</span> <span className="font-medium">{crmInfo.receiveAt}</span></span>}
+                {crmInfo.tags           && <span><span className="text-gray-400">Теги:</span> <span className="font-medium">{crmInfo.tags}</span></span>}
+              </div>
+              {crmInfo.productsList && <p className="text-gray-500 truncate" title={crmInfo.productsList}>{crmInfo.productsList}</p>}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <FL label="Пріоритет">
               <select className="inp" value={f.priority} onChange={e=>u('priority')(e.target.value)}>
