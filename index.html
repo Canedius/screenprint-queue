@@ -52,7 +52,8 @@ const call = (op, data) => fetch(`${BASE()}/screenprint`, {
 }).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
 
 function parseOrder(o) {
-  // Розпаковуємо positions і crmData з JSON-рядків (збережених в DataTable)
+  if (!o || typeof o !== 'object') return null;
+
   let positions = o.positions;
   if (typeof positions === 'string') {
     try { positions = JSON.parse(positions); } catch { positions = []; }
@@ -61,27 +62,34 @@ function parseOrder(o) {
 
   let crm = {};
   if (typeof o.crmData === 'string' && o.crmData) {
-    try { crm = JSON.parse(o.crmData); } catch { crm = {}; }
+    try {
+      const p = JSON.parse(o.crmData);
+      if (p && typeof p === 'object' && !Array.isArray(p)) crm = p;
+    } catch { crm = {}; }
   }
 
   return {
     ...o,
     positions: positions || undefined,
-    crmProducts:    crm.products    || o.crmProducts    || [],
-    crmManager:     crm.manager     || o.crmManager     || '',
-    crmPhone:       crm.phone       || o.crmPhone       || '',
-    crmDelivery:    crm.delivery    || o.crmDelivery    || '',
-    crmStatusLabel: crm.statusLabel || o.crmStatusLabel || '',
-    crmTrackingCode:crm.trackingCode|| o.crmTrackingCode|| '',
-    crmReceiveAt:   crm.receiveAt   || o.crmReceiveAt   || '',
-    crmTags:        crm.tags        || o.crmTags        || '',
-    crmTotalPaid:   crm.totalPaid   || o.crmTotalPaid   || 0,
-    crmCurrency:    crm.currency    || o.crmCurrency    || 'UAH',
+    crmProducts:    Array.isArray(crm.products) ? crm.products : (o.crmProducts || []),
+    crmManager:     crm.manager      || o.crmManager      || '',
+    crmPhone:       crm.phone        || o.crmPhone        || '',
+    crmDelivery:    crm.delivery     || o.crmDelivery     || '',
+    crmStatusLabel: crm.statusLabel  || o.crmStatusLabel  || '',
+    crmTrackingCode:crm.trackingCode || o.crmTrackingCode || '',
+    crmReceiveAt:   crm.receiveAt    || o.crmReceiveAt    || '',
+    crmTags:        crm.tags         || o.crmTags         || '',
+    crmTotalPaid:   crm.totalPaid    || o.crmTotalPaid    || 0,
+    crmCurrency:    crm.currency     || o.crmCurrency     || 'UAH',
   };
 }
 
 const api = {
-  getOrders:   ()     => call('get').then(r => (r.orders || []).map(parseOrder)),
+  getOrders: () => call('get').then(r => {
+    const list = (r && Array.isArray(r.orders)) ? r.orders : [];
+    // фільтруємо порожні рядки (alwaysOutputData дає {} якщо таблиця пуста)
+    return list.filter(o => o && o.orderId).map(parseOrder).filter(Boolean);
+  }),
   createOrder: (d)    => call('create', d),
   updateOrder: (id,d) => call('update', {...d, id}),
   deleteOrder: (id)   => call('delete', {id}),
