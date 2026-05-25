@@ -9,6 +9,7 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>tailwind.config = { darkMode: 'class' }</script>
+  <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
   <script src="config.js"></script>
   <style>
     .inp {
@@ -25,6 +26,127 @@
     .dark .inp { background: #374151; border-color: #4b5563; color: #f3f4f6; }
     .dark .inp:focus { border-color: #60a5fa; }
     textarea.inp { resize: vertical; }
+
+    /* Kanban card — physical size 85×55 mm (standard business-card), spreadsheet-style */
+    .kanban-card {
+      width: 85mm;
+      height: 55mm;
+      box-sizing: border-box;
+      background: #fff;
+      color: #111827;
+      border: 0.5pt solid #000;
+      display: grid;
+      grid-template-rows: 5mm 4mm 4mm 4mm 12mm 26mm;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 9pt;
+      line-height: 1.2;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .kanban-card * {
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .kanban-card .kc-head {
+      background: #c00000;
+      color: #fff;
+      font-weight: 700;
+      font-size: 10pt;
+      text-align: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 2mm;
+      letter-spacing: 0.3pt;
+      position: relative;
+    }
+    .kanban-card .kc-head-art {
+      font-size: 8pt;
+      font-weight: 600;
+      font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+      opacity: 0.95;
+      letter-spacing: 0;
+    }
+    .kanban-card .kc-row {
+      display: grid;
+      grid-template-columns: 25mm 1fr;
+      border-top: 0.5pt solid #000;
+      font-size: 8pt;
+    }
+    .kanban-card .kc-row > div { padding: 0.5mm 1.2mm; display: flex; align-items: center; justify-content: center; text-align: center; }
+    .kanban-card .kc-row > div + div { border-left: 0.5pt solid #000; font-weight: 600; }
+    .kanban-card .kc-l-blue   { background: #4a90d9; color: #fff; font-weight: 600; }
+    .kanban-card .kc-l-yellow { background: #ffd966; color: #111; font-weight: 600; }
+    .kanban-card .kc-l-green  { background: #6aa84f; color: #fff; font-weight: 600; }
+    .kanban-card .kc-minmax {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      border-top: 0.5pt solid #000;
+    }
+    .kanban-card .kc-minmax > div { display: grid; grid-template-rows: 3.5mm 1fr; }
+    .kanban-card .kc-minmax > div + div { border-left: 0.5pt solid #000; }
+    .kanban-card .kc-minmax .kc-mm-h {
+      background: #6aa84f; color: #fff; font-weight: 700; font-size: 8pt; text-align: center; padding: 0; line-height: 3.5mm;
+    }
+    .kanban-card .kc-minmax .kc-mm-v {
+      text-align: center; font-weight: 700; font-size: 12pt; padding: 0.5mm 0 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .kanban-card .kc-foot {
+      display: grid;
+      grid-template-columns: 1fr 23mm;
+      background: #fff2cc;
+      border-top: 0.5pt solid #000;
+    }
+    .kanban-card.is-transport .kc-foot { grid-template-columns: 1fr; }
+    .kanban-card.is-transport .kc-foot-text { font-size: 7pt; padding: 1.5mm 2mm; }
+    .kanban-card .kc-foot-text {
+      padding: 1.2mm 1.5mm;
+      color: #c00000;
+      font-size: 6.5pt;
+      font-weight: 600;
+      line-height: 1.2;
+      display: flex;
+      align-items: center;
+      text-align: center;
+      justify-content: center;
+    }
+    .kanban-card .kc-qr {
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      background: #fff;
+      border-left: 0.5pt solid #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      overflow: hidden;
+    }
+    .kanban-card .kc-qr canvas, .kanban-card .kc-qr img {
+      width: 22mm !important;
+      height: 22mm !important;
+      display: block;
+    }
+
+    /* Print sheet kept mounted off-screen so QR canvases render; promoted on print */
+    #print-sheet {
+      position: absolute;
+      left: -10000px;
+      top: 0;
+      display: grid;
+      grid-template-columns: 85mm 85mm;
+      grid-auto-rows: 55mm;
+      gap: 4mm 4mm;
+    }
+    @media print {
+      @page { size: A4; margin: 8mm; }
+      body * { visibility: hidden; }
+      #print-sheet, #print-sheet * { visibility: visible; }
+      #print-sheet { left: 0 !important; top: 0 !important; }
+      .kanban-card { page-break-inside: avoid; box-shadow: none; }
+    }
   </style>
 </head>
 <body class="antialiased">
@@ -42,6 +164,9 @@ const PRINT_SIZES = {
   a3:    { label: 'A3',    cap: 500,  note: '297×420 мм' },
   large: { label: '> A3', cap: 200,  note: 'більше A3' },
 };
+
+const KANBAN_WEBHOOK = 'https://pngstudio.app.n8n.cloud/webhook/e8d4ece1-0b5f-4640-87dc-42925b37a4e3';
+const KANBAN_LS_KEY  = 'screenprint_kanban_cards_v1';
 
 // ── API ───────────────────────────────────────────────────────────────────────
 const BASE = () => (typeof N8N_BASE !== 'undefined' ? N8N_BASE : '');
@@ -140,6 +265,32 @@ function sumColors(o) {
 const PRIORITIES = { urgent: '🔴 Терміново', week: '🟡 Цього тижня', queue: '🟢 В черзі' };
 const STATUSES   = { accepted: 'Прийнято', in_progress: 'В роботі', ready: 'Готово', issued: 'Видано' };
 
+// Каталог товарів — обираєш зі списку, артикул і назва підставляються автоматично
+const PRODUCT_CATALOG = [
+  { sku: '009587',   name: 'Губки кухонні HoReCa Line 90x58x28 мм' },
+  { sku: '012343',   name: 'DOMESTOS Хвойна Свіжість 1 л' },
+  { sku: '317155',   name: 'Mr.Muscle 500 мл зелений розпилювач' },
+  { sku: '50309',    name: 'Туалетний папір Кохавинка з втулкою' },
+  { sku: '25472700', name: 'Крем-мило з бальзамом PRO SERVICE Молоко та мед' },
+  { sku: '16113100', name: 'Пакети для сміття ProService 60 л' },
+  { sku: '16112800', name: 'Пакети для сміття ProService 35 л' },
+  { sku: '30064430', name: 'Серветки вологі для прибирання Solo Ultra Power Кедр та жасмин' },
+  { sku: '450187',   name: 'Рушники паперові Кохавинка' },
+  { sku: '391302',   name: 'Кава розчинна' },
+  { sku: '13274',    name: 'Цукор Діамант білий кристалічний' },
+  { sku: '382676',   name: 'Кава Даллмайр' },
+  { sku: '132439',   name: 'Сухі вершки Nestle Coffee-Mate' },
+  { sku: '879655',   name: 'Чай в пакетиках LOVARE' },
+  { sku: '801841',   name: 'Чай в пакетиках Tess Pleasure' },
+  { sku: '81743692', name: 'Засіб для миття посуду FAIRY Зелене Яблуко' },
+  { sku: '16.4949',  name: 'Папір офісний А4 100 арк' },
+  { sku: '75139',    name: 'Серветки косметичні звичайні' },
+  { sku: '612788',   name: 'Цукерки БімБом' },
+  { sku: '81713197', name: 'Засіб для миття підлоги Mr Proper лимон' },
+  { sku: '13672',    name: 'Рукавички гумові' },
+  { sku: '310453',   name: 'Запаска до валика для чищення' },
+];
+
 // ── DATE UTILS ───────────────────────────────────────────────────────────────
 function todayStr() {
   const d = new Date();
@@ -185,10 +336,10 @@ function recalc(orders) {
       : rolls*HOURS_PER_DAY/CAP;
     const printDays = totalHours>0 ? Math.ceil(totalHours/HOURS_PER_DAY) : 0;
     const days     = printDays+(o.isNewDesign?1:0);
-    const end          = days>0 ? addWD(start,days) : start;
+    const end          = days>0 ? addWD(start,days-1) : start;
     const confirmedEnd = o.confirmedReadyDate ? ensureWD(o.confirmedReadyDate) : null;
-    const effectiveEnd = confirmedEnd ? maxD(end, confirmedEnd) : end;
-    if (confirmedEnd || days>0) tail = maxD(tail, effectiveEnd);
+    const effectiveEnd = (days>0 && confirmedEnd) ? maxD(end, confirmedEnd) : end;
+    if (days>0) tail = maxD(tail, effectiveEnd);
     return {...o, autoStart:start, autoEnd:effectiveEnd, rolls};
   });
   return [...result, ...issued.map(o=>({...o, rolls:(o.items||0)*sumColors(o)}))];
@@ -229,22 +380,27 @@ function OrdersProvider({children}) {
   },[]);
 
   const updateOrder = useCallback(async (id,u)=>{
-    try {
-      setOrders(prev=>{
-        const merged = prev.map(o=>{
-          if(o.id!==id) return o;
-          const updated={...o,...u};
-          if('crmProducts' in u){
-            let cd={}; if(typeof o.crmData==='string') try{cd=JSON.parse(o.crmData);}catch{}
-            updated.crmData=JSON.stringify({...cd,products:updated.crmProducts});
-          }
-          return updated;
-        });
-        const full=merged.find(o=>o.id===id);
-        api.updateOrder(id,full).catch(()=>alert('Помилка оновлення.'));
-        return recalc(merged);
+    let full = null;
+    setOrders(prev=>{
+      const merged = prev.map(o=>{
+        if(o.id!==id) return o;
+        const updated={...o,...u};
+        if('crmProducts' in u){
+          let cd={}; if(typeof o.crmData==='string') try{cd=JSON.parse(o.crmData);}catch{}
+          updated.crmData=JSON.stringify({...cd,products:updated.crmProducts});
+        }
+        return updated;
       });
-    } catch { alert('Помилка оновлення.'); }
+      full = merged.find(o=>o.id===id);
+      return recalc(merged);
+    });
+    if (!full) return;
+    try {
+      await api.updateOrder(id, full);
+    } catch (e) {
+      alert('Помилка оновлення: ' + (e?.message || 'workflow failed'));
+      throw e;
+    }
   },[]);
 
   const deleteOrder = useCallback(async id=>{
@@ -308,6 +464,7 @@ function AppInner() {
         {page==='queue'        && <Queue/>}
         {page==='dropship'     && <Dropship/>}
         {page==='calculator'   && <Calculator/>}
+        {page==='kanban'       && <Kanban/>}
         {page==='instructions' && <Instructions/>}
       </main>
     </div>
@@ -321,7 +478,7 @@ function App() {
 // ── NAV ───────────────────────────────────────────────────────────────────────
 function Nav({page,setPage}) {
   const {dark,setDark} = useContext(ThemeCtx);
-  const tabs = [{id:'dashboard',e:'📊',l:'Дашборд'},{id:'queue',e:'📋',l:'Черга'},{id:'dropship',e:'📦',l:'Дропшипінг'},{id:'calculator',e:'🧮',l:'Калькулятор'},{id:'instructions',e:'📖',l:'Довідник'}];
+  const tabs = [{id:'dashboard',e:'📊',l:'Дашборд'},{id:'queue',e:'📋',l:'Черга'},{id:'dropship',e:'📦',l:'Дропшипінг'},{id:'calculator',e:'🧮',l:'Калькулятор'},{id:'kanban',e:'🗂',l:'Канбан'},{id:'instructions',e:'📖',l:'Довідник'}];
   return (
     <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-3 h-14 flex items-center justify-between">
@@ -534,6 +691,9 @@ function OrderCard({o,idx,onDel,onChange}) {
   function openExpand() {
     if (!expanded) {
       const snap={
+        keycrmId: o.keycrmId||'',
+        client: o.client||'',
+        crmManager: o.crmManager||'',
         positions: o.positions?.length>0 ? o.positions : [{position: o.printPosition||'front', colors: o.colors||'', printSize:'a4'}],
         inkType: o.inkType||'plastisol',
         isNewDesign: o.isNewDesign||false,
@@ -553,10 +713,17 @@ function OrderCard({o,idx,onDel,onChange}) {
 
   async function saveEdit() {
     setSaving(true);
-    await onChange(edit);
-    initEdit.current=JSON.stringify(edit);
-    setSaving(false);
-    setExpanded(false);
+    const clean = {
+      ...edit,
+      items: parseInt(edit.items)||0,
+      positions: (edit.positions||[]).map(p=>({...p, colors: parseInt(p.colors)||0})),
+    };
+    try {
+      await onChange(clean);
+      initEdit.current=JSON.stringify(edit);
+      setExpanded(false);
+    } catch {/* alert уже показано в updateOrder */}
+    finally { setSaving(false); }
   }
 
   const isDirty = edit ? JSON.stringify(edit)!==initEdit.current : false;
@@ -602,6 +769,22 @@ function OrderCard({o,idx,onDel,onChange}) {
       {/* ── Expanded panel ── */}
       {expanded && edit && (
         <div className="border-t border-gray-100 dark:border-gray-700 px-4 py-4 space-y-5">
+
+          {/* Order info */}
+          <div className="space-y-3">
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Замовлення</p>
+            <div className="grid grid-cols-3 gap-3">
+              <FL label="ID KeyCRM">
+                <input className="inp" value={edit.keycrmId} onChange={e=>setEdit(p=>({...p,keycrmId:e.target.value}))} placeholder="123456"/>
+              </FL>
+              <FL label="Клієнт">
+                <input className="inp" value={edit.client} onChange={e=>setEdit(p=>({...p,client:e.target.value}))} placeholder="Назва / ПІБ"/>
+              </FL>
+              <FL label="Менеджер">
+                <input className="inp" value={edit.crmManager} onChange={e=>setEdit(p=>({...p,crmManager:e.target.value}))} placeholder="Ім'я менеджера"/>
+              </FL>
+            </div>
+          </div>
 
           {/* Production settings */}
           <div className="space-y-3">
@@ -791,7 +974,8 @@ function Modal({order,onClose,onSave}) {
 
   function quickSave() {
     if (submittedRef.current) return;
-    if (!f.client.trim()) return alert('Не вдалось отримати клієнта з CRM');
+    if (!f.client.trim() && !f.crmManager.trim() && !f.keycrmId.trim())
+      return alert('Вкажіть хоча б номер, клієнта або менеджера');
     submittedRef.current = true;
     onSave({...f, items: parseInt(f.items)||0});
   }
@@ -816,16 +1000,21 @@ function Modal({order,onClose,onSave}) {
                 </button>
               </div>
             </FL>
-            <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
-              <p className="text-xs text-gray-400 mb-3">Або додати вручну без CRM:</p>
+            <div className="border-t border-gray-100 dark:border-gray-700 pt-4 space-y-3">
+              <p className="text-xs text-gray-400">Або додати вручну без CRM:</p>
+              <FL label="Номер замовлення (опц.)">
+                <input className="inp" value={f.keycrmId} onChange={e=>u('keycrmId')(e.target.value)} placeholder="напр. 104499"/>
+              </FL>
               <FL label="Клієнт">
                 <input className="inp" value={f.client} onChange={e=>u('client')(e.target.value)} placeholder="Назва / ПІБ"/>
               </FL>
-              {f.client && (
-                <button onClick={quickSave} className="mt-3 w-full bg-gray-600 hover:bg-gray-700 text-white py-2 rounded-lg font-medium text-sm transition-colors">
-                  Додати вручну
-                </button>
-              )}
+              <FL label="Менеджер (опц.)">
+                <input className="inp" value={f.crmManager} onChange={e=>u('crmManager')(e.target.value)} placeholder="Ім'я менеджера"/>
+              </FL>
+              <button onClick={quickSave}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg font-medium text-sm transition-colors">
+                Додати вручну
+              </button>
             </div>
           </div>
         </div>
@@ -949,6 +1138,7 @@ function Modal({order,onClose,onSave}) {
             <FL label="Клієнт *"><input className="inp" value={f.client} onChange={e=>u('client')(e.target.value)} placeholder="Назва / ПІБ" required/></FL>
           </div>
           <div className="grid grid-cols-2 gap-3">
+            <FL label="Менеджер"><input className="inp" value={f.crmManager} onChange={e=>u('crmManager')(e.target.value)} placeholder="Ім'я менеджера"/></FL>
             <FL label="Пріоритет">
               <select className="inp" value={f.priority} onChange={e=>u('priority')(e.target.value)}>
                 {Object.entries(PRIORITIES).map(([k,v])=><option key={k} value={k}>{v}</option>)}
@@ -1054,10 +1244,12 @@ function Calculator() {
       }, 0);
   const printDays = totalHours>0 ? Math.ceil(totalHours/HOURS_PER_DAY) : 0;
   const days      = printDays+(c.isNewDesign?1:0);
-  const latestEnd = orders.filter(o=>o.status!=='issued'&&o.autoEnd).reduce((m,o)=>maxD(m,o.autoEnd),null);
+  const latestEnd = orders
+    .filter(o=>o.status!=='issued'&&o.status!=='ready')
+    .reduce((m,o)=>maxD(m, o.confirmedReadyDate ? ensureWD(o.confirmedReadyDate) : o.autoEnd), null);
   const earliest  = ensureWD(c.hasProduct?todayStr():(c.expectedProductDate||todayStr()));
   const startDate = latestEnd ? maxD(earliest,addWD(latestEnd,1)) : earliest;
-  const endDate   = days>0 ? addWD(startDate,days) : null;
+  const endDate   = days>0 ? addWD(startDate,days-1) : null;
 
   return (
     <div className="space-y-5 max-w-lg">
@@ -1209,6 +1401,258 @@ function Calculator() {
             })}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+// ── KANBAN ────────────────────────────────────────────────────────────────────
+function kanbanQrUrl(c) {
+  const p = new URLSearchParams();
+  if (c.article) p.set('article', c.article);
+  else if (c.name) p.set('name', c.name);
+  return `${KANBAN_WEBHOOK}?${p.toString()}`;
+}
+
+function KanbanCardPreview({card}) {
+  const canvasRef = useRef(null);
+  const isTransport = card.type === 'transport';
+
+  useEffect(() => {
+    if (isTransport) return;
+    if (!canvasRef.current || typeof QRious === 'undefined') return;
+    try {
+      new QRious({
+        element: canvasRef.current,
+        value: kanbanQrUrl(card),
+        size: 360,
+        level: 'M',
+        background: '#ffffff',
+        foreground: '#111827',
+      });
+    } catch (e) { console.warn('QR error', e); }
+  }, [card.name, card.article, isTransport]);
+
+  return (
+    <div className={`kanban-card${isTransport ? ' is-transport' : ''}`}>
+      <div className="kc-head">
+        <span>Канбан картка</span>
+        {card.article && <span className="kc-head-art">арт. {card.article}</span>}
+      </div>
+
+      <div className="kc-row">
+        <div className="kc-l-blue">Назва товару</div>
+        <div>{card.name || '—'}</div>
+      </div>
+
+      <div className="kc-row">
+        <div className="kc-l-yellow">Постачальник</div>
+        <div>{card.supplier || '—'}</div>
+      </div>
+
+      <div className="kc-row">
+        <div className="kc-l-green">Куди</div>
+        <div>{card.location || '—'}</div>
+      </div>
+
+      <div className="kc-minmax">
+        <div>
+          <div className="kc-mm-h">min</div>
+          <div className="kc-mm-v">{card.min ?? '—'}</div>
+        </div>
+        <div>
+          <div className="kc-mm-h">max</div>
+          <div className="kc-mm-v">{card.max ?? '—'}</div>
+        </div>
+      </div>
+
+      <div className="kc-foot">
+        <div className="kc-foot-text">
+          {isTransport
+            ? <><strong>Якщо товар скінчився!!!</strong> Не загуби цю картку — поповни запас із зони постачання і повісь її на новий товар</>
+            : 'Якщо до тебе потрапила ця карточка — відскануй QR код і постав цю карточку в коробку Канбан'}
+        </div>
+        {!isTransport && <div className="kc-qr"><canvas ref={canvasRef}/></div>}
+      </div>
+    </div>
+  );
+}
+
+const EMPTY_KANBAN_FORM = {type:'supply', name:'', article:'', supplier:'7Office', location:'', min:'', max:''};
+
+function Kanban() {
+  const [cards, setCards] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(KANBAN_LS_KEY) || '[]'); }
+    catch { return []; }
+  });
+  const [editing, setEditing] = useState(null);  // null | {...form} | {id, ...}
+  const [form, setForm] = useState(EMPTY_KANBAN_FORM);
+
+  useEffect(() => {
+    localStorage.setItem(KANBAN_LS_KEY, JSON.stringify(cards));
+  }, [cards]);
+
+  const openNew = (type='supply') => { setForm({...EMPTY_KANBAN_FORM, type}); setEditing('new'); };
+  const openEdit = (c) => { setForm({type:c.type||'supply', name:c.name||'', article:c.article||'', supplier:c.supplier||'', location:c.location||'', min:c.min||'', max:c.max||''}); setEditing(c.id); };
+  const cancel   = () => { setEditing(null); setForm(EMPTY_KANBAN_FORM); };
+
+  const save = (e) => {
+    e?.preventDefault();
+    if (!form.name.trim()) return;
+    const payload = {
+      type: form.type === 'transport' ? 'transport' : 'supply',
+      name: form.name.trim(),
+      article: form.article.trim() || undefined,
+      supplier: form.supplier.trim() || undefined,
+      location: form.location.trim() || undefined,
+      min: form.min === '' ? undefined : Number(form.min),
+      max: form.max === '' ? undefined : Number(form.max),
+    };
+    if (editing === 'new') {
+      const id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()));
+      setCards([...cards, {id, ...payload, createdAt: new Date().toISOString()}]);
+    } else {
+      setCards(cards.map(c => c.id === editing ? {...c, ...payload} : c));
+    }
+    cancel();
+  };
+
+  const remove = (id) => {
+    if (!confirm('Видалити картку?')) return;
+    setCards(cards.filter(c => c.id !== id));
+  };
+
+  const printAll = () => window.print();
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h1 className="text-2xl font-bold">Канбан-картки</h1>
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={()=>openNew('supply')}
+            className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+            + Картка постачання
+          </button>
+          <button onClick={()=>openNew('transport')}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+            + Картка транспортування
+          </button>
+          <button onClick={printAll} disabled={cards.length === 0}
+            className="bg-gray-700 hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+            🖨 Друкувати всі ({cards.length})
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-xl p-4 text-sm text-blue-900 dark:text-blue-200">
+        <p className="font-semibold mb-1">Як це працює</p>
+        <ol className="list-decimal ml-5 space-y-0.5 text-blue-800 dark:text-blue-300">
+          <li>Створи картку для товару, який треба контролювати (Domestos, кава, рукавички тощо)</li>
+          <li>Друкуй A4-аркуш і ламінуй — 10 карток на сторінці (85×55 мм)</li>
+          <li>Повісь картку на полицю. Коли запас закінчується — скануй QR телефоном</li>
+          <li>Запит автоматично потрапить у замовлення (Google Sheets + Telegram п'ятниця 11:00)</li>
+        </ol>
+      </div>
+
+      {editing && (
+        <form onSubmit={save} className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5 space-y-3">
+          <h2 className="font-bold text-lg">{editing === 'new' ? 'Нова картка' : 'Редагувати картку'}</h2>
+          <div className="flex gap-2 text-sm">
+            <button type="button" onClick={()=>setForm({...form, type:'supply'})}
+              className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${form.type==='supply'?'bg-red-600 text-white':'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}>
+              📦 Постачання (з QR)
+            </button>
+            <button type="button" onClick={()=>setForm({...form, type:'transport'})}
+              className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${form.type==='transport'?'bg-blue-600 text-white':'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}>
+              🚛 Транспортування (без QR)
+            </button>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <label className="block sm:col-span-2">
+              <span className="text-xs text-gray-500 dark:text-gray-400">Обрати з каталогу</span>
+              <select className="inp mt-1" value={PRODUCT_CATALOG.find(p=>p.name===form.name && p.sku===form.article) ? form.article : ''}
+                onChange={e=>{
+                  const p = PRODUCT_CATALOG.find(x=>x.sku===e.target.value);
+                  if (p) setForm({...form, name:p.name, article:p.sku});
+                }}>
+                <option value="">— з каталогу: автозаповнить назву + артикул —</option>
+                {PRODUCT_CATALOG.map(p=>(
+                  <option key={p.sku} value={p.sku}>{p.name} ({p.sku})</option>
+                ))}
+              </select>
+            </label>
+            <label className="block sm:col-span-2">
+              <span className="text-xs text-gray-500 dark:text-gray-400">Назва товару *</span>
+              <input className="inp mt-1" required value={form.name} onChange={e=>setForm({...form, name:e.target.value})} placeholder="напр. Domestos Хвойна Свіжість 1 л"/>
+            </label>
+            <label className="block">
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                Артикул {form.type==='supply' && <span className="text-gray-400">(в QR)</span>}
+              </span>
+              <input className="inp mt-1 font-mono" value={form.article} onChange={e=>setForm({...form, article:e.target.value})} placeholder="012343"/>
+            </label>
+            <label className="block">
+              <span className="text-xs text-gray-500 dark:text-gray-400">Постачальник</span>
+              <input className="inp mt-1" value={form.supplier} onChange={e=>setForm({...form, supplier:e.target.value})} placeholder="Metro / 7Office"/>
+            </label>
+            <label className="block">
+              <span className="text-xs text-gray-500 dark:text-gray-400">Куди</span>
+              <input className="inp mt-1" value={form.location} onChange={e=>setForm({...form, location:e.target.value})} placeholder={form.type==='transport' ? 'Туалет (Поличка 3)' : 'Кухня / Склад / Офіс'}/>
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className="text-xs text-gray-500 dark:text-gray-400">Min запас</span>
+                <input type="number" min="0" className="inp mt-1" value={form.min} onChange={e=>setForm({...form, min:e.target.value})}/>
+              </label>
+              <label className="block">
+                <span className="text-xs text-gray-500 dark:text-gray-400">Max запас</span>
+                <input type="number" min="0" className="inp mt-1" value={form.max} onChange={e=>setForm({...form, max:e.target.value})}/>
+              </label>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" onClick={cancel} className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600">Скасувати</button>
+            <button type="submit" className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white">Зберегти</button>
+          </div>
+        </form>
+      )}
+
+      {cards.length === 0 ? (
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-dashed border-gray-300 dark:border-gray-600 p-10 text-center text-gray-500 dark:text-gray-400">
+          <div className="text-4xl mb-2">🗂</div>
+          <p>Карток ще немає. Створи першу — натисни <span className="font-semibold">«+ Картка постачання»</span> або <span className="font-semibold">«+ Картка транспортування»</span>.</p>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {[
+            {key:'supply',    title:'📦 Картки постачання',     accent:'text-red-700 dark:text-red-400'},
+            {key:'transport', title:'🚛 Картки транспортування', accent:'text-blue-700 dark:text-blue-400'},
+          ].map(group => {
+            const list = cards.filter(c => (c.type || 'supply') === group.key);
+            if (list.length === 0) return null;
+            return (
+              <div key={group.key}>
+                <h2 className={`text-lg font-bold mb-3 ${group.accent}`}>{group.title} <span className="text-sm font-normal text-gray-500">({list.length})</span></h2>
+                <div className="grid gap-4" style={{gridTemplateColumns:'repeat(auto-fill, minmax(85mm, 1fr))'}}>
+                  {list.map(c => (
+                    <div key={c.id} className="flex flex-col items-start gap-2">
+                      <KanbanCardPreview card={c}/>
+                      <div className="flex gap-2 text-xs">
+                        <button onClick={()=>openEdit(c)} className="px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600">✏ Редагувати</button>
+                        <button onClick={()=>remove(c.id)} className="px-2 py-1 rounded bg-red-50 dark:bg-red-950 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900">🗑 Видалити</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Hidden print sheet — kept mounted so QR canvases render */}
+      <div id="print-sheet">
+        {cards.map(c => <KanbanCardPreview key={`print-${c.id}`} card={c}/>)}
       </div>
     </div>
   );
