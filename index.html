@@ -6,7 +6,16 @@
   <title>Виробнича черга — Шовкотрафарет</title>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+  <script>
+    // React/ReactDOM are loaded as UMD globals, so JSX must compile to
+    // React.createElement (classic runtime). The automatic runtime injects
+    // `import {jsx} from "react/jsx-runtime"`, which breaks when Babel appends
+    // the transformed code as a non-module script.
+    Babel.registerPreset('react-classic', {
+      presets: [[Babel.availablePresets['react'], { runtime: 'classic' }]],
+    });
+  </script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>tailwind.config = { darkMode: 'class' }</script>
   <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
@@ -151,7 +160,7 @@
 </head>
 <body class="antialiased">
 <div id="root"></div>
-<script type="text/babel">
+<script type="text/babel" data-presets="react-classic">
 const { useState, useEffect, useContext, createContext, useCallback, useMemo, useRef } = React;
 
 // ── CONSTANTS ────────────────────────────────────────────────────────────────
