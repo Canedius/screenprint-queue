@@ -473,6 +473,7 @@ function AppInner() {
         {page==='queue'        && <Queue/>}
         {page==='dropship'     && <Dropship/>}
         {page==='calculator'   && <Calculator/>}
+        {page==='materials'    && <MaterialsCalculator/>}
         {page==='kanban'       && <Kanban/>}
         {page==='instructions' && <Instructions/>}
       </main>
@@ -487,7 +488,7 @@ function App() {
 // ── NAV ───────────────────────────────────────────────────────────────────────
 function Nav({page,setPage}) {
   const {dark,setDark} = useContext(ThemeCtx);
-  const tabs = [{id:'dashboard',e:'📊',l:'Дашборд'},{id:'queue',e:'📋',l:'Черга'},{id:'dropship',e:'📦',l:'Дропшипінг'},{id:'calculator',e:'🧮',l:'Калькулятор'},{id:'kanban',e:'🗂',l:'Канбан'},{id:'instructions',e:'📖',l:'Довідник'}];
+  const tabs = [{id:'dashboard',e:'📊',l:'Дашборд'},{id:'queue',e:'📋',l:'Черга'},{id:'dropship',e:'📦',l:'Дропшипінг'},{id:'calculator',e:'🧮',l:'Калькулятор'},{id:'materials',e:'🧪',l:'Матеріали'},{id:'kanban',e:'🗂',l:'Канбан'},{id:'instructions',e:'📖',l:'Довідник'}];
   return (
     <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-3 h-14 flex items-center justify-between">
@@ -1411,6 +1412,209 @@ function Calculator() {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+// ── MATERIALS CALCULATOR ──────────────────────────────────────────────────────
+// Норми витрат на 1 метр чистої плівки
+const MAT_WASTE      = 0.15;      // +15% на брак
+const MAT_GLUE_G     = 15;        // клей, г/м
+const MAT_CYAN_ML    = 1.55;      // фарба Cyan, мл/м
+const MAT_MAGENTA_ML = 1.55;      // фарба Magenta, мл/м
+const MAT_YELLOW_ML  = 1.70;      // фарба Yellow, мл/м
+const MAT_BLACK_ML   = 1.20;      // фарба Black, мл/м
+const MAT_WHITE_DIV  = 60;        // біла фарба: 1 л на 60 м
+const MAT_ROLL_LEN   = 100;       // довжина рулону плівки, м
+const MAT_LS_KEY     = 'sp_materials_history';
+
+// Розрахунок матеріалів за кількістю чистих метрів → {clean,total,glue,cyan,...,rolls}
+function matCompute(clean) {
+  const total = clean * (1 + MAT_WASTE);
+  return {
+    clean, total,
+    glue:    Math.round(MAT_GLUE_G/1000*total),
+    cyan:    Math.round(MAT_CYAN_ML/1000*total),
+    magenta: Math.round(MAT_MAGENTA_ML/1000*total),
+    yellow:  Math.round(MAT_YELLOW_ML/1000*total),
+    black:   Math.round(MAT_BLACK_ML/1000*total),
+    white:   Math.round(total/MAT_WHITE_DIV),
+    rolls:   Math.ceil(total/MAT_ROLL_LEN),
+  };
+}
+
+function MaterialsCalculator() {
+  const [meters,setMeters] = useState('');
+  const [date,setDate]     = useState(todayStr());
+  const [note,setNote]     = useState('');
+  const [history,setHistory] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(MAT_LS_KEY) || '[]'); }
+    catch { return []; }
+  });
+
+  useEffect(() => {
+    localStorage.setItem(MAT_LS_KEY, JSON.stringify(history));
+  }, [history]);
+
+  const clean = parseFloat(meters);
+  const valid = !isNaN(clean) && clean > 0;
+  const m = valid ? matCompute(clean) : null;
+  const totalR = m ? Math.round(m.total) : 0;
+
+  const save = () => {
+    if (!valid) return;
+    const entry = { id: Date.now(), date, note: note.trim(), ...matCompute(clean) };
+    setHistory(h => [entry, ...h].sort((a,b)=> (a.date<b.date?1:a.date>b.date?-1:b.id-a.id)));
+    setNote('');
+  };
+  const remove = (id) => setHistory(h => h.filter(e=>e.id!==id));
+  const clearAll = () => { if (confirm('Очистити всю історію замовлень?')) setHistory([]); };
+
+  const totalMeters = history.reduce((s,e)=>s+(e.clean||0),0);
+
+  const rows = m ? [
+    {name:'Клей',                    strong:true,  v:m.glue,   unit:'кг',      note:`15 г × ${totalR} м`},
+    {name:'Фарба Cyan (блакитна)',   dot:'#22a6c9', v:m.cyan,   unit:'літрів',  note:`1.55 мл × ${totalR} м`},
+    {name:'Фарба Magenta (пурпурна)',dot:'#c9227f', v:m.magenta,unit:'літрів',  note:`1.55 мл × ${totalR} м`},
+    {name:'Фарба Yellow (жовта)',    dot:'#e0c000', v:m.yellow, unit:'літрів',  note:`1.70 мл × ${totalR} м`},
+    {name:'Фарба Black (чорна)',     dot:'#333333', v:m.black,  unit:'літрів',  note:`1.20 мл × ${totalR} м`},
+    {name:'Фарба біла',              strong:true,  v:m.white,  unit:'літрів',  note:`${totalR} м / 60`},
+    {name:'Плівка',                  strong:true,  v:m.rolls,  unit:'рулонів', note:`${totalR} м / 100 м`},
+  ] : [];
+
+  return (
+    <div className="space-y-5">
+      <h1 className="text-2xl font-bold">Калькулятор матеріалів для друку плівки</h1>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,420px)_minmax(0,1fr)] gap-5 items-start">
+       {/* ── Ліва колонка: калькулятор ── */}
+       <div className="space-y-5">
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5 space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
+          <FL label="Метри плівки (чиста, без браку)">
+            <input className="inp" type="number" min="0" step="1" value={meters}
+              onChange={e=>setMeters(e.target.value)} placeholder="Наприклад, 17000"/>
+          </FL>
+          <FL label="Дата замовлення">
+            <input className="inp" type="date" value={date} onChange={e=>setDate(e.target.value)}/>
+          </FL>
+        </div>
+        <FL label="Примітка (необовʼязково)">
+          <input className="inp" type="text" value={note} onChange={e=>setNote(e.target.value)} placeholder="Постачальник, партія тощо"/>
+        </FL>
+        {valid && (
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="bg-gray-50 dark:bg-gray-700 rounded-lg px-4 py-3 text-sm font-mono flex-1 min-w-[200px]">
+              <span className="text-gray-500">{clean} м + 15% брак = </span>
+              <span className="text-blue-600 dark:text-blue-400 font-bold text-lg">{totalR} м</span>
+            </div>
+            <button type="button" onClick={save}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg font-medium transition-colors shrink-0">
+              💾 Зберегти в історію
+            </button>
+          </div>
+        )}
+      </div>
+
+      {valid ? (
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-blue-600 text-white text-left">
+                <th className="px-4 py-2.5 font-semibold">Матеріал</th>
+                <th className="px-4 py-2.5 font-semibold text-right">Кількість</th>
+                <th className="px-4 py-2.5 font-semibold">Одиниця</th>
+                <th className="px-4 py-2.5 font-semibold hidden sm:table-cell">Пояснення</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+              {rows.map(r=>(
+                <tr key={r.name} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                  <td className={`px-4 py-2.5 ${r.strong?'font-semibold':''}`}>
+                    {r.dot && <span className="inline-block w-2.5 h-2.5 rounded-full mr-2 align-middle" style={{background:r.dot}}/>}
+                    {r.name}
+                  </td>
+                  <td className="px-4 py-2.5 text-right font-bold text-blue-600 dark:text-blue-400 text-base">{r.v}</td>
+                  <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400">{r.unit}</td>
+                  <td className="px-4 py-2.5 text-gray-400 hidden sm:table-cell font-mono text-xs">{r.note} = {r.v} {r.unit==='кг'?'кг':r.unit==='рулонів'?'рул.':'л'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="text-center text-gray-400 py-10">Введіть кількість метрів плівки</div>
+      )}
+
+      <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-xl p-4 text-sm text-blue-700 dark:text-blue-300 space-y-1">
+        <p className="font-semibold">Примітка: до плівки додано 15% на брак.</p>
+        <p>Клей — 15 г/м</p>
+        <p>CMYK (загалом 6 мл/м):</p>
+        <ul className="pl-4 space-y-0.5">
+          <li>• Cyan — 1.55 мл/м</li>
+          <li>• Magenta — 1.55 мл/м</li>
+          <li>• Yellow — 1.70 мл/м (більше)</li>
+          <li>• Black — 1.20 мл/м (менше)</li>
+          <li>• Біла — 1 л на 60 м</li>
+        </ul>
+      </div>
+       </div>{/* /ліва колонка */}
+
+      {/* ── Права колонка: історія замовлень ── */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden lg:sticky lg:top-20">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+          <h2 className="font-bold">Історія замовлень {history.length>0 && <span className="text-gray-400 font-normal text-sm">({history.length})</span>}</h2>
+          {history.length>0 && (
+            <button type="button" onClick={clearAll} className="text-xs text-red-500 hover:text-red-700">Очистити все</button>
+          )}
+        </div>
+        {history.length===0 ? (
+          <div className="text-center text-gray-400 py-8 text-sm">Ще немає збережених замовлень</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm whitespace-nowrap">
+              <thead>
+                <tr className="text-left text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700 text-xs">
+                  <th className="px-3 py-2 font-semibold">Дата</th>
+                  <th className="px-3 py-2 font-semibold text-right">Метри</th>
+                  <th className="px-3 py-2 font-semibold text-right">+брак</th>
+                  <th className="px-3 py-2 font-semibold text-right">Клей, кг</th>
+                  <th className="px-3 py-2 font-semibold text-right" title="Cyan / Magenta / Yellow / Black, л">CMYK, л</th>
+                  <th className="px-3 py-2 font-semibold text-right">Біла, л</th>
+                  <th className="px-3 py-2 font-semibold text-right">Рулони</th>
+                  <th className="px-3 py-2 font-semibold">Примітка</th>
+                  <th className="px-3 py-2"/>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                {history.map(e=>(
+                  <tr key={e.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                    <td className="px-3 py-2 font-medium">{e.date}</td>
+                    <td className="px-3 py-2 text-right">{e.clean}</td>
+                    <td className="px-3 py-2 text-right text-gray-500">{Math.round(e.total)}</td>
+                    <td className="px-3 py-2 text-right">{e.glue}</td>
+                    <td className="px-3 py-2 text-right font-mono text-xs">{e.cyan}/{e.magenta}/{e.yellow}/{e.black}</td>
+                    <td className="px-3 py-2 text-right">{e.white}</td>
+                    <td className="px-3 py-2 text-right font-semibold text-blue-600 dark:text-blue-400">{e.rolls}</td>
+                    <td className="px-3 py-2 text-gray-500 max-w-[160px] truncate" title={e.note}>{e.note||'—'}</td>
+                    <td className="px-3 py-2 text-right">
+                      <button type="button" onClick={()=>remove(e.id)} className="text-red-400 hover:text-red-600" title="Видалити">✕</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-gray-200 dark:border-gray-600 font-semibold bg-gray-50 dark:bg-gray-700/40">
+                  <td className="px-3 py-2">Разом</td>
+                  <td className="px-3 py-2 text-right text-blue-600 dark:text-blue-400">{totalMeters}</td>
+                  <td className="px-3 py-2" colSpan={7}/>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </div>{/* /права колонка */}
+      </div>{/* /grid */}
     </div>
   );
 }
