@@ -1691,6 +1691,14 @@ function KanbanCardPreview({card}) {
   );
 }
 
+// Аптечка — готовий набір карток постачання (постачальник «Аптека», зона «Аптечка», min 1 / max 2)
+const PHARMACY_KIT = [
+  'Парацетамол', 'Ібупрофен', 'Аміцитрон', 'Лоперамід', 'Ентеросгель',
+  'Панкреатин', 'Еспумізан', 'Лоратадин', 'Стрепсілс', 'Спазмалгон ДУО',
+  'Перекис водню', 'Пантенол', 'Антистрес', 'Валідол', 'Йод',
+  'Бинти', 'Вата',
+];
+
 const EMPTY_KANBAN_FORM = {type:'supply', name:'', article:'', supplier:'7Office', location:'', min:'', max:''};
 
 function Kanban() {
@@ -1735,6 +1743,17 @@ function Kanban() {
     setCards(cards.filter(c => c.id !== id));
   };
 
+  const addPharmacyKit = () => {
+    const existing = new Set(cards.map(c => (c.name || '').trim().toLowerCase()));
+    const fresh = PHARMACY_KIT.filter(n => !existing.has(n.toLowerCase())).map(n => ({
+      id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random())),
+      type: 'supply', name: n, supplier: 'Аптека', location: 'Аптечка', min: 1, max: 2,
+      createdAt: new Date().toISOString(),
+    }));
+    if (fresh.length === 0) { alert('Усі картки аптечки вже створені'); return; }
+    setCards([...cards, ...fresh]);
+  };
+
   const printAll = () => window.print();
 
   return (
@@ -1749,6 +1768,10 @@ function Kanban() {
           <button onClick={()=>openNew('transport')}
             className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
             + Картка транспортування
+          </button>
+          <button onClick={addPharmacyKit}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+            💊 Аптечка ({PHARMACY_KIT.length} шт)
           </button>
           <button onClick={printAll} disabled={cards.length === 0}
             className="bg-gray-700 hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
