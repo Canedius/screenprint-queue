@@ -279,7 +279,8 @@ const api = {
   // мережева помилка тут не ловиться → OrdersProvider покаже екран помилки
   createOrder: (d)    => call('create', d),
   updateOrder: (id,d) => call('update', {...d, id}),
-  deleteOrder: (id)   => call('delete', {id}),
+  // orderId — стабільний ключ; id рядка в таблиці змінюється після кожного update
+  deleteOrder: (o)    => call('delete', {id: o.id, orderId: o.orderId || o.id}),
   listByDate: (dateFrom, dateTo) => call('crm_list_by_date', {dateFrom, dateTo}),
   listByStatus: (statusIds, printType) => call('crm_list_by_status', {statusIds, printType}),
 };
@@ -503,11 +504,12 @@ function OrdersProvider({children}) {
     }
   },[]);
 
-  const deleteOrder = useCallback(async id=>{
+  const deleteOrder = useCallback(async target=>{
+    const o = (target && typeof target === 'object') ? target : {id: target};
     try {
-      await api.deleteOrder(id);
-      setOrders(prev=>recalc(prev.filter(o=>o.id!==id)));
-    } catch { alert('Помилка видалення.'); }
+      await api.deleteOrder(o);
+      setOrders(prev=>recalc(prev.filter(x=>x.id!==o.id)));
+    } catch (e) { alert('Помилка видалення: ' + (e?.message || 'workflow failed')); }
   },[]);
 
   const reload = useCallback(()=>{
@@ -541,6 +543,7 @@ function OrdersProvider({children}) {
       if (!key || seen.has(key)) continue;
       seen.add(key);
       const crmFields = {
+        items:           c.items||0,
         crmProducts:     c.products||[],
         crmCompany:      c.companyName||'',
         crmManager:      c.manager||'',
@@ -591,9 +594,16 @@ function OrdersProvider({children}) {
 
     // Перечитуємо базу — стан завжди дорівнює тому, що реально записано
     const after = await api.getOrders();
-    setOrders(recalc(Array.isArray(after) ? after : []));
+    const fresh = Array.isArray(after) ? after : [];
+    setOrders(recalc(fresh));
 
-    return {found: list.length, added, updated: toUpdate.length};
+    // Замовлення, що лишились у черзі, але вже поза вибіркою CRM: у них
+    // змінився статус або вид друку. Синхронізація нічого не видаляє —
+    // просто показуємо їх, а рішення за користувачем.
+    const crmKeys = new Set(list.map(c=>String(c.orderId||c.id||'')).filter(Boolean));
+    const stale = fresh.filter(o=>o.keycrmId && !crmKeys.has(String(o.keycrmId)));
+
+    return {found: list.length, added, updated: toUpdate.length, stale};
   },[updateOrder]);
 
   return <OrdersCtx.Provider value={{orders,loading,error,addOrder,updateOrder,deleteOrder,reload,syncFromCRM}}>{children}</OrdersCtx.Provider>;
@@ -1050,9 +1060,10 @@ function WeekPrintSheet({orders, monday}) {
 function Queue() {
   const {orders,addOrder,updateOrder,deleteOrder,syncFromCRM} = useContext(OrdersCtx);
   const [modal,setModal] = useState(null);
-  const [confirmDel,setConfirmDel] = useState(null); // {id, label}
+  const [confirmDel,setConfirmDel] = useState(null); // {order, label}
   const [syncing,setSyncing] = useState(false);
   const [syncMsg,setSyncMsg] = useState(null); // {ok, text}
+  const [stale,setStale] = useState([]);  // є в черзі, але вже не у вибірці CRM
   const [view,setView] = useState(()=>localStorage.getItem('sp_queue_view')||'calendar');
   useEffect(()=>{ localStorage.setItem('sp_queue_view', view); },[view]);
   const [weekStart,setWeekStart] = useState(()=>mondayOf(todayStr()));
@@ -1076,6 +1087,7 @@ function Queue() {
     setSyncing(true); setSyncMsg(null);
     try {
       const r = await syncFromCRM();
+      setStale(r.stale||[]);
       setSyncMsg({ok:true, text:`У CRM знайдено ${r.found} · додано ${r.added} · оновлено ${r.updated}`});
     } catch (e) {
       setSyncMsg({ok:false, text:`Не вдалося оновити: ${e?.message || e}`});
@@ -1100,7 +1112,7 @@ function Queue() {
 
   function handleDel(o) {
     const label = [o.keycrmId?`#${o.keycrmId}`:'', o.client||''].filter(Boolean).join(' · ') || o.id;
-    setConfirmDel({id: o.id, label});
+    setConfirmDel({order: o, label});
   }
 
   return (
@@ -1131,6 +1143,32 @@ function Queue() {
           ? 'bg-green-50 dark:bg-green-900/30 border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
           : 'bg-red-50 dark:bg-red-900/30 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'}`}>
           {syncMsg.ok ? '✅ ' : '⚠️ '}{syncMsg.text}
+        </div>
+      )}
+
+      {stale.length>0 && (
+        <div className="p-3 rounded-lg text-sm border bg-amber-50 dark:bg-amber-900/30 border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-200">
+          <div className="flex items-start justify-between gap-3">
+            <p className="font-medium">
+              ⚠️ {stale.length} {stale.length===1?'замовлення':'замовлень'} у черзі вже поза вибіркою CRM —
+              змінився статус або вид друку. Синхронізація їх не чіпає.
+            </p>
+            <button onClick={()=>setStale([])} className="shrink-0 text-amber-600 dark:text-amber-300 hover:underline text-xs">сховати</button>
+          </div>
+          <div className="mt-2 space-y-1">
+            {stale.map(o=>(
+              <div key={o.id} className="flex items-center gap-2 text-xs">
+                <a href={`https://pngstudio.keycrm.app/app/orders/view/${o.keycrmId}`} target="_blank" rel="noopener noreferrer"
+                  className="font-mono text-blue-600 dark:text-blue-400 hover:underline">#{o.keycrmId}</a>
+                <span className="truncate">{o.crmCompany || o.client || '—'}</span>
+                <span className="text-amber-600 dark:text-amber-400">{o.crmStatusLabel || ''}</span>
+                <button onClick={async ()=>{ await deleteOrder(o); setStale(v=>v.filter(x=>x.id!==o.id)); }}
+                  className="ml-auto shrink-0 px-2 py-0.5 rounded border border-amber-400 dark:border-amber-600 hover:bg-amber-100 dark:hover:bg-amber-800/50">
+                  Прибрати з черги
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -1216,7 +1254,7 @@ function Queue() {
                 className="px-4 py-2 rounded-lg text-sm font-medium border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
                 Скасувати
               </button>
-              <button onClick={()=>{ deleteOrder(confirmDel.id); setConfirmDel(null); }}
+              <button onClick={()=>{ deleteOrder(confirmDel.order); setConfirmDel(null); }}
                 className="px-4 py-2 rounded-lg text-sm font-medium bg-red-600 hover:bg-red-700 text-white transition-colors">
                 Видалити
               </button>
