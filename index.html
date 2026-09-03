@@ -464,6 +464,11 @@ function OrdersProvider({children}) {
   const [loading,setLoading] = useState(true);
   const [error,setError] = useState(null);
 
+  // Updater у setOrders викликається під час рендеру, а не синхронно, тож читати
+  // з нього поточне замовлення не можна — тримаємо актуальний зріз у ref.
+  const ordersRef = useRef(orders);
+  ordersRef.current = orders;
+
   // Завантаження при старті
   useEffect(()=>{
     if (!BASE()) { setLoading(false); setError('no_config'); return; }
@@ -481,21 +486,14 @@ function OrdersProvider({children}) {
   },[]);
 
   const updateOrder = useCallback(async (id,u)=>{
-    let full = null;
-    setOrders(prev=>{
-      const merged = prev.map(o=>{
-        if(o.id!==id) return o;
-        const updated={...o,...u};
-        if('crmProducts' in u){
-          let cd={}; if(typeof o.crmData==='string') try{cd=JSON.parse(o.crmData);}catch{}
-          updated.crmData=JSON.stringify({...cd,products:updated.crmProducts});
-        }
-        return updated;
-      });
-      full = merged.find(o=>o.id===id);
-      return recalc(merged);
-    });
-    if (!full) return;
+    const cur = ordersRef.current.find(o=>o.id===id);
+    if (!cur) return;
+    const full = {...cur, ...u};
+    if ('crmProducts' in u) {
+      let cd={}; if(typeof cur.crmData==='string') try{cd=JSON.parse(cur.crmData);}catch{}
+      full.crmData = JSON.stringify({...cd, products: full.crmProducts});
+    }
+    setOrders(prev=>recalc(prev.map(o=>o.id===id?full:o)));
     try {
       await api.updateOrder(id, full);
     } catch (e) {
@@ -561,7 +559,7 @@ function OrdersProvider({children}) {
         const changed = Object.keys(crmFields).some(k => k==='crmProducts'
           ? JSON.stringify(exist[k]||[]) !== JSON.stringify(crmFields[k])
           : String(exist[k] ?? '') !== String(crmFields[k]));
-        if (changed) toUpdate.push({id: exist.id, patch: crmFields});
+        if (changed) toUpdate.push({row: exist, patch: crmFields});
       } else {
         toCreate.push({
           keycrmId: key,
@@ -583,7 +581,9 @@ function OrdersProvider({children}) {
       }
     }
 
-    for (const {id, patch} of toUpdate) await updateOrder(id, patch);
+    // Пишемо напряму з рядка, щойно прочитаного з бази: стан React тут не потрібен
+    // і в циклі await він усе одно ще не встиг оновитись.
+    for (const {row, patch} of toUpdate) await api.updateOrder(row.id, {...row, ...patch});
 
     const stamp = Date.now();
     let added = 0;
@@ -604,7 +604,7 @@ function OrdersProvider({children}) {
     const stale = fresh.filter(o=>o.keycrmId && !crmKeys.has(String(o.keycrmId)));
 
     return {found: list.length, added, updated: toUpdate.length, stale};
-  },[updateOrder]);
+  },[]);
 
   return <OrdersCtx.Provider value={{orders,loading,error,addOrder,updateOrder,deleteOrder,reload,syncFromCRM}}>{children}</OrdersCtx.Provider>;
 }
