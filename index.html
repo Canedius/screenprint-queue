@@ -19,6 +19,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script>tailwind.config = { darkMode: 'class' }</script>
   <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
   <script src="config.js"></script>
   <style>
     .inp {
@@ -35,6 +36,24 @@
     .dark .inp { background: #374151; border-color: #4b5563; color: #f3f4f6; }
     .dark .inp:focus { border-color: #60a5fa; }
     textarea.inp { resize: vertical; }
+
+    /* ── Календар черги (FullCalendar) ── */
+    .sp-calendar .fc { --fc-border-color:#e5e7eb; --fc-today-bg-color:#eff6ff; --fc-neutral-bg-color:#f9fafb; font-size:.8125rem; }
+    .sp-calendar .fc .fc-toolbar-title { font-size:1.125rem; font-weight:700; }
+    .sp-calendar .fc .fc-button { background:#4f46e5; border-color:#4f46e5; font-size:.75rem; padding:.25rem .6rem; text-transform:none; }
+    .sp-calendar .fc .fc-button:hover { background:#4338ca; border-color:#4338ca; }
+    .sp-calendar .fc .fc-button-primary:disabled { background:#a5b4fc; border-color:#a5b4fc; }
+    .sp-calendar .fc .fc-button-active { background:#3730a3 !important; border-color:#3730a3 !important; }
+    .sp-calendar .fc-event { cursor:grab; font-weight:600; padding:1px 4px; }
+    .sp-calendar .fc-event:active { cursor:grabbing; }
+    .sp-calendar .fc-day-sat, .sp-calendar .fc-day-sun { background:#f8fafc; }
+    .dark .sp-calendar .fc { --fc-border-color:#4b5563; --fc-today-bg-color:#1e3a5f; --fc-neutral-bg-color:#374151;
+      --fc-page-bg-color:#1f2937; --fc-list-event-hover-bg-color:#374151; color:#e5e7eb; }
+    .dark .sp-calendar .fc-day-sat, .dark .sp-calendar .fc-day-sun { background:#111827; }
+    .dark .sp-calendar .fc .fc-col-header-cell-cushion,
+    .dark .sp-calendar .fc .fc-daygrid-day-number,
+    .dark .sp-calendar .fc .fc-list-day-text,
+    .dark .sp-calendar .fc .fc-list-day-side-text { color:#d1d5db; }
 
     /* Kanban card — physical size 85×55 mm (standard business-card), spreadsheet-style */
     .kanban-card {
@@ -149,12 +168,32 @@
       grid-auto-rows: 55mm;
       gap: 4mm 4mm;
     }
+    /* Тижневий план — аркуш A4, тримаємо за екраном і показуємо лише на друк */
+    #week-print {
+      position: absolute; left: -10000px; top: 0;
+      width: 194mm; color: #000; background: #fff;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    #week-print h1 { font-size: 13pt; margin: 0 0 1mm; }
+    #week-print .wp-sub { font-size: 8.5pt; color: #444; margin: 0 0 4mm; }
+    #week-print .wp-day { margin-bottom: 4mm; page-break-inside: avoid; }
+    #week-print .wp-dayhead { background: #e8e8e8; border: 1px solid #888; padding: 1.2mm 2mm; font-size: 10pt; font-weight: 700; }
+    #week-print .wp-daysum { font-weight: 400; font-size: 8.5pt; color: #333; }
+    #week-print table { width: 100%; border-collapse: collapse; }
+    #week-print th, #week-print td { border: 1px solid #888; padding: 1mm 1.5mm; text-align: left; font-size: 8.5pt; vertical-align: top; }
+    #week-print th { background: #f4f4f4; font-size: 8pt; font-weight: 700; }
+    #week-print .wp-late { color: #b00000; font-weight: 700; }
+    #week-print .wp-empty { border: 1px solid #888; border-top: none; padding: 1.5mm 2mm; font-size: 8.5pt; color: #666; font-style: italic; }
+    #week-print .wp-total { margin-top: 3mm; font-size: 10pt; font-weight: 700; }
+
     @media print {
       @page { size: A4; margin: 8mm; }
       body * { visibility: hidden; }
       #print-sheet, #print-sheet * { visibility: visible; }
       #print-sheet { left: 0 !important; top: 0 !important; }
       .kanban-card { page-break-inside: avoid; box-shadow: none; }
+      #week-print, #week-print * { visibility: visible; }
+      #week-print { left: 0 !important; top: 0 !important; }
     }
   </style>
 </head>
@@ -206,6 +245,7 @@ function parseOrder(o) {
     ...o,
     positions: positions || undefined,
     crmProducts:    (()=>{ let p=o.crmProducts; if(typeof p==='string'){try{p=JSON.parse(p);}catch{p=null;}} return Array.isArray(p)?p:(Array.isArray(crm.products)?crm.products:[]); })(),
+    crmCompany:     crm.company      || o.crmCompany      || '',
     crmManager:     crm.manager      || o.crmManager      || '',
     crmPhone:       crm.phone        || o.crmPhone        || '',
     crmDelivery:    crm.delivery     || o.crmDelivery     || '',
@@ -241,7 +281,12 @@ const api = {
   updateOrder: (id,d) => call('update', {...d, id}),
   deleteOrder: (id)   => call('delete', {id}),
   listByDate: (dateFrom, dateTo) => call('crm_list_by_date', {dateFrom, dateTo}),
+  listByStatus: (statusIds, printType) => call('crm_list_by_status', {statusIds, printType}),
 };
+
+// Синхронізація черги з KeyCRM: статуси + вид друку (кастомне поле «Вид друку», з підстраховкою по тегу)
+const SYNC_STATUS_IDS = [1, 2, 3, 4, 6, 39, 42];
+const SYNC_PRINT_TYPE = 'Шовкотрафарет';
 
 const INK_TYPES = {
   plastisol: { label: 'Пластизольна', note: 'Полімеризація 120–160°C. Не сохне на трафареті. Найпоширеніша.' },
@@ -301,10 +346,25 @@ const PRODUCT_CATALOG = [
 ];
 
 // ── DATE UTILS ───────────────────────────────────────────────────────────────
-function todayStr() {
-  const d = new Date();
+function isoOf(d) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
+
+function todayStr() { return isoOf(new Date()); }
+
+function addDaysDate(d, n) { const x = new Date(d.getTime()); x.setDate(x.getDate()+n); return x; }
+function addDaysISO(s, n)  { return isoOf(addDaysDate(new Date(s+'T12:00:00'), n)); }
+
+// Українська локаль для FullCalendar (у пакеті на CDN файлів локалей немає)
+const UK_LOCALE = {
+  code: 'uk',
+  week: { dow: 1, doy: 7 },
+  buttonText: { prev:'Назад', next:'Далі', today:'Сьогодні', month:'Місяць', week:'Тиждень', day:'День', list:'Список' },
+  weekText: 'Тиж',
+  allDayText: 'Увесь день',
+  moreLinkText: n => '+ ще ' + n,
+  noEventsText: 'Замовлень у цьому періоді немає',
+};
 
 function ensureWD(s) {
   let d = new Date((s||todayStr())+'T12:00:00');
@@ -320,6 +380,27 @@ function addWD(s, n) {
 }
 
 function maxD(a,b) { if (!a) return b; if (!b) return a; return a>=b?a:b; }
+
+// Ефективний дедлайн: підтверджена дата готовності, інакше розрахований кінець
+function deadlineOf(o) { return (o && (o.confirmedReadyDate || o.autoEnd)) || ''; }
+
+// На скільки календарних днів замовлення протерміноване (0 — ні)
+function overdueDays(o) {
+  if (!o || o.status==='issued' || o.status==='ready') return 0;
+  const dl = deadlineOf(o);
+  const t  = todayStr();
+  if (!dl || dl >= t) return 0;
+  return Math.round((new Date(t+'T12:00:00') - new Date(dl+'T12:00:00'))/86400000);
+}
+
+// «3 дні» / «5 днів» — правильна форма
+function daysWord(n) {
+  const a = Math.abs(n) % 100, b = a % 10;
+  if (a > 10 && a < 20) return 'днів';
+  if (b === 1) return 'день';
+  if (b >= 2 && b <= 4) return 'дні';
+  return 'днів';
+}
 function fmtD(s)   { if (!s) return '—'; const [y,m,d]=s.split('-'); return `${d}.${m}.${y}`; }
 function fmtDs(s)  { if (!s) return '—'; const [,m,d]=s.split('-'); return `${d}.${m}`; }
 
@@ -334,7 +415,7 @@ function recalc(orders) {
   let tail = null;
   const result = active.map(o=>{
     const earliest = ensureWD(o.hasProduct ? todayStr() : (o.expectedProductDate||todayStr()));
-    const start    = tail ? maxD(earliest, addWD(tail,1)) : earliest;
+    const queueStart = tail ? maxD(earliest, addWD(tail,1)) : earliest;
     const rolls    = (o.items||0)*sumColors(o);
     const totalHours = Array.isArray(o.positions) && o.positions.length > 0
       ? o.positions.reduce((s,p) => {
@@ -345,10 +426,20 @@ function recalc(orders) {
       : rolls*HOURS_PER_DAY/CAP;
     const printDays = totalHours>0 ? Math.ceil(totalHours/HOURS_PER_DAY) : 0;
     const days     = printDays+(o.isNewDesign?1:0);
-    const end          = days>0 ? addWD(start,days-1) : start;
     const confirmedEnd = o.confirmedReadyDate ? ensureWD(o.confirmedReadyDate) : null;
-    const effectiveEnd = (days>0 && confirmedEnd) ? maxD(end, confirmedEnd) : end;
-    if (days>0) tail = maxD(tail, effectiveEnd);
+
+    // Кольори ще не заповнені → тривалість друку невідома. Такі замовлення не
+    // займають потужність цеху, тож ставимо їх на власну дату готовності,
+    // а не звалюємо купою на сьогодні.
+    if (days<=0) {
+      const day = confirmedEnd || queueStart;
+      return {...o, autoStart:day, autoEnd:day, rolls};
+    }
+
+    const start        = queueStart;
+    const end          = addWD(start, days-1);
+    const effectiveEnd = confirmedEnd ? maxD(end, confirmedEnd) : end;
+    tail = maxD(tail, effectiveEnd);
     return {...o, autoStart:start, autoEnd:effectiveEnd, rolls};
   });
   return [...result, ...issued.map(o=>({...o, rolls:(o.items||0)*sumColors(o)}))];
@@ -426,7 +517,86 @@ function OrdersProvider({children}) {
       .catch(()=>{ setError('fetch_failed'); setLoading(false); });
   },[]);
 
-  return <OrdersCtx.Provider value={{orders,loading,error,addOrder,updateOrder,deleteOrder,reload}}>{children}</OrdersCtx.Provider>;
+  // Підтягнути всі замовлення KeyCRM зі статусами SYNC_STATUS_IDS і видом друку SYNC_PRINT_TYPE:
+  // нові — створити, наявні — оновити CRM-поля (ручні дані не чіпаємо)
+  const syncFromCRM = useCallback(async ()=>{
+    // Актуальний стан беремо з бази, а не зі знімка React-стану: інакше повторний
+    // запуск (або клік під час попереднього) створює дублі замовлень.
+    const [res, current] = await Promise.all([
+      api.listByStatus(SYNC_STATUS_IDS, SYNC_PRINT_TYPE),
+      api.getOrders(),
+    ]);
+    if (res && res.ok === false) throw new Error(res.error || 'помилка запиту до KeyCRM');
+    const list = Array.isArray(res?.orders) ? res.orders
+               : Array.isArray(res)         ? res
+               : Array.isArray(res?.data)   ? res.data : [];
+    const existing = Array.isArray(current) ? current : [];
+
+    const byKey = new Map(existing.filter(o=>o.keycrmId).map(o=>[String(o.keycrmId), o]));
+    const toCreate = [], toUpdate = [];
+    const seen = new Set(); // захист від повторів усередині однієї відповіді CRM
+
+    for (const c of list) {
+      const key = String(c.orderId||c.id||'');
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      const crmFields = {
+        crmProducts:     c.products||[],
+        crmCompany:      c.companyName||'',
+        crmManager:      c.manager||'',
+        crmPhone:        c.phone||'',
+        crmDelivery:     c.deliveryService||'',
+        crmStatusLabel:  c.statusLabel||'',
+        crmTrackingCode: c.trackingCode||'',
+        crmReceiveAt:    c.receiveAt||'',
+        crmTags:         c.tags||'',
+        crmTotalPaid:    c.totalPaid||0,
+        crmCurrency:     c.currency||'UAH',
+      };
+      const exist = byKey.get(key);
+      if (exist) {
+        const changed = Object.keys(crmFields).some(k => k==='crmProducts'
+          ? JSON.stringify(exist[k]||[]) !== JSON.stringify(crmFields[k])
+          : String(exist[k] ?? '') !== String(crmFields[k]));
+        if (changed) toUpdate.push({id: exist.id, patch: crmFields});
+      } else {
+        toCreate.push({
+          keycrmId: key,
+          client: c.client||'',
+          priority: 'queue',
+          status: 'accepted',
+          items: c.items||0,
+          positions: [{position:'front', colors:'', printSize:'a4'}],
+          isNewDesign: false,
+          hasProduct: true,
+          expectedProductDate: '',
+          fileReceived: true,
+          inkType: 'plastisol',
+          printPosition: 'front',
+          confirmedReadyDate: c.readyDate||'',
+          notes: c.notes||'',
+          ...crmFields,
+        });
+      }
+    }
+
+    for (const {id, patch} of toUpdate) await updateOrder(id, patch);
+
+    const stamp = Date.now();
+    let added = 0;
+    for (let i=0; i<toCreate.length; i++) {
+      await api.createOrder({...toCreate[i], id: String(stamp + i), createdAt: new Date().toISOString()});
+      added++;
+    }
+
+    // Перечитуємо базу — стан завжди дорівнює тому, що реально записано
+    const after = await api.getOrders();
+    setOrders(recalc(Array.isArray(after) ? after : []));
+
+    return {found: list.length, added, updated: toUpdate.length};
+  },[updateOrder]);
+
+  return <OrdersCtx.Provider value={{orders,loading,error,addOrder,updateOrder,deleteOrder,reload,syncFromCRM}}>{children}</OrdersCtx.Provider>;
 }
 
 // ── APP ───────────────────────────────────────────────────────────────────────
@@ -530,6 +700,7 @@ function Dashboard() {
   const rollsWk  = orders.filter(o=>o.autoStart>=ws&&o.autoStart<=we&&o.status!=='issued').reduce((s,o)=>s+(o.rolls||0),0);
   const active   = orders.filter(o=>o.status!=='issued').length;
   const urgent   = orders.filter(o=>{ const dl=o.confirmedReadyDate||o.autoEnd; return (dl===today||dl===tomorrow)&&o.status!=='issued'&&o.status!=='ready'; });
+  const overdue  = orders.filter(o=>overdueDays(o)>0).sort((a,b)=>overdueDays(b)-overdueDays(a));
   const inProg   = orders.filter(o=>o.status==='in_progress');
 
   const clr = v=>v>80?'bg-red-400':v>60?'bg-yellow-400':'bg-blue-400';
@@ -557,6 +728,32 @@ function Dashboard() {
           );
         })}
       </div>
+
+      {overdue.length>0 && (
+        <div className="bg-red-100 dark:bg-red-950 border-2 border-red-400 dark:border-red-700 rounded-xl p-4">
+          <h2 className="font-bold text-red-700 dark:text-red-400 mb-3">⏰ Протерміновані — {overdue.length}</h2>
+          <div className="grid sm:grid-cols-2 gap-2">
+            {overdue.map(o=>{
+              const od = overdueDays(o);
+              return (
+                <div key={o.id} className="bg-white dark:bg-gray-800 rounded-lg p-3 border border-red-300 dark:border-red-700">
+                  <div className="flex justify-between items-start gap-2">
+                    <span className="font-semibold truncate">
+                      {o.keycrmId ? <span className="font-mono text-red-500 mr-1">#{o.keycrmId}</span> : null}
+                      {o.client||'—'}
+                    </span>
+                    <span className="shrink-0 text-xs bg-red-600 text-white px-2 py-0.5 rounded font-bold">−{od} {daysWord(od)}</span>
+                  </div>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Дедлайн {fmtD(deadlineOf(o))} · {o.items}шт · {STATUSES[o.status]}
+                    {o.crmManager ? ' · '+o.crmManager : ''}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {urgent.length>0 && (
         <div className="bg-red-50 dark:bg-red-950 border border-red-300 dark:border-red-800 rounded-xl p-4">
@@ -590,20 +787,300 @@ function Dashboard() {
         </div>
       )}
 
-      {urgent.length===0 && (
+      {urgent.length===0 && overdue.length===0 && (
         <div className="bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-xl p-3 text-center">
-          <p className="text-green-700 dark:text-green-400 text-sm">✅ Термінових замовлень немає</p>
+          <p className="text-green-700 dark:text-green-400 text-sm">✅ Термінових і протермінованих замовлень немає</p>
         </div>
       )}
     </div>
   );
 }
 
+// ── КАЛЕНДАР ЧЕРГИ (FullCalendar 6, global build) ─────────────────────────────
+// Кожне замовлення — смуга від autoStart до autoEnd. Перетягування/розтягування
+// записує нову дату готовності (confirmedReadyDate); решту черги перераховує recalc.
+const CAL_COLORS = {
+  overdue:     '#dc2626',
+  in_progress: '#2563eb',
+  ready:       '#16a34a',
+  urgent:      '#f97316',
+  week:        '#eab308',
+  queue:       '#64748b',
+};
+
+function calColorOf(o) {
+  if (overdueDays(o) > 0)        return CAL_COLORS.overdue;
+  if (o.status === 'in_progress') return CAL_COLORS.in_progress;
+  if (o.status === 'ready')       return CAL_COLORS.ready;
+  return CAL_COLORS[o.priority] || CAL_COLORS.queue;
+}
+
+// Прокати, розмазані по робочих днях кожного замовлення → завантаження цеху на день
+function loadByDay(orders) {
+  const map = {};
+  for (const o of orders) {
+    if (o.status === 'issued' || !o.autoStart || !o.autoEnd) continue;
+    const days = [];
+    let d = o.autoStart;
+    while (d <= o.autoEnd && days.length < 400) {
+      const wd = new Date(d + 'T12:00:00').getDay();
+      if (wd !== 0 && wd !== 6) days.push(d);
+      d = addDaysISO(d, 1);
+    }
+    if (!days.length) continue;
+    const per = (o.rolls || 0) / days.length;
+    for (const k of days) map[k] = (map[k] || 0) + per;
+  }
+  for (const k of Object.keys(map)) map[k] = Math.round(map[k]);
+  return map;
+}
+
+function QueueCalendar({orders, onMove, onOpen}) {
+  const hostRef = useRef(null);
+  const calRef  = useRef(null);
+  const moveRef = useRef(onMove);
+  const openRef = useRef(onOpen);
+  moveRef.current = onMove;
+  openRef.current = onOpen;
+
+  const visible = useMemo(()=>orders.filter(o=>o.status!=='issued'), [orders]);
+
+  const events = useMemo(()=>visible.map(o=>{
+    const start = o.autoStart || o.confirmedReadyDate || todayStr();
+    const endIn = o.autoEnd   || o.confirmedReadyDate || start;
+    const color = calColorOf(o);
+    const od    = overdueDays(o);
+    return {
+      id: o.id,
+      title: [o.keycrmId?`#${o.keycrmId}`:'', o.crmCompany||'', o.crmManager||'—', o.items>0?`${o.items}шт`:'', o.rolls>0?`${o.rolls}пр`:'']
+             .filter(Boolean).join(' · ') + (od>0?`  ⚠ −${od} ${daysWord(od)}`:''),
+      start,
+      end: addDaysISO(endIn, 1), // FullCalendar: кінець ексклюзивний
+      allDay: true,
+      backgroundColor: color,
+      borderColor: color,
+      textColor: '#fff',
+      extendedProps: {orderId: o.id},
+    };
+  }), [visible]);
+
+  const load = useMemo(()=>loadByDay(visible), [visible]);
+
+  // Клітинка дня: номер + бейдж завантаження
+  const dayCell = useCallback((map)=>(arg)=>{
+    const v = map[isoOf(arg.date)] || 0;
+    if (!v) return {html:`<span>${arg.dayNumberText}</span>`};
+    const pct = Math.round(v/CAP*100);
+    const bg  = pct>100 ? '#dc2626' : pct>80 ? '#f97316' : pct>50 ? '#eab308' : '#60a5fa';
+    return {html:
+      `<span>${arg.dayNumberText}</span>` +
+      `<span title="${v} прокатів з ${CAP} (${pct}%)" style="margin-left:6px;font-size:10px;font-weight:700;color:#fff;` +
+      `background:${bg};border-radius:999px;padding:1px 6px;vertical-align:middle">${v}</span>`};
+  }, []);
+
+  // Створення календаря — один раз
+  useEffect(()=>{
+    if (!hostRef.current || typeof FullCalendar === 'undefined') return;
+    const cal = new FullCalendar.Calendar(hostRef.current, {
+      initialView: 'dayGridMonth',
+      headerToolbar: {left:'prev,next today', center:'title', right:'dayGridMonth,dayGridWeek,listMonth'},
+      firstDay: 1,
+      height: 'auto',
+      locale: UK_LOCALE,
+      editable: true,
+      eventStartEditable: true,
+      eventDurationEditable: true,
+      eventResizableFromStart: false,
+      eventOrder: 'start,-duration,title',
+      dayMaxEvents: 6,
+      weekNumbers: false,
+      businessHours: {daysOfWeek:[1,2,3,4,5]},
+      events: [],
+      eventDrop:   info => applyMove(info),
+      eventResize: info => applyMove(info),
+      eventClick:  info => { const id = info.event.extendedProps.orderId; if (openRef.current) openRef.current(id); },
+    });
+
+    async function applyMove(info) {
+      const id  = info.event.extendedProps.orderId;
+      const end = info.event.end || addDaysDate(info.event.start, 1);
+      const newEnd = isoOf(new Date(end.getTime() - 86400000)); // назад до включного дня
+      try { await moveRef.current(id, newEnd); }
+      catch { info.revert(); }
+    }
+
+    cal.render();
+    calRef.current = cal;
+    return () => { cal.destroy(); calRef.current = null; };
+  }, []);
+
+  // Оновлення подій і завантаження при зміні черги
+  useEffect(()=>{
+    const cal = calRef.current;
+    if (!cal) return;
+    cal.setOption('events', events);
+    cal.setOption('dayCellContent', dayCell(load));
+  }, [events, load, dayCell]);
+
+  if (typeof FullCalendar === 'undefined') return (
+    <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-300 dark:border-yellow-700 rounded-xl p-4 text-sm text-yellow-800 dark:text-yellow-200">
+      ⚠️ Не завантажилась бібліотека календаря (FullCalendar). Перевірте інтернет і оновіть сторінку — або скористайтесь виглядом «Список».
+    </div>
+  );
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-3">
+      <div ref={hostRef} className="sp-calendar"/>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 pt-3 border-t border-gray-100 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400">
+        <span>Легенда:</span>
+        {[['Протерміновано',CAL_COLORS.overdue],['У виробництві',CAL_COLORS.in_progress],['Готове',CAL_COLORS.ready],
+          ['Терміново',CAL_COLORS.urgent],['Цього тижня',CAL_COLORS.week],['В черзі',CAL_COLORS.queue]].map(([l,c])=>(
+          <span key={l} className="flex items-center gap-1">
+            <span className="w-3 h-3 rounded-sm inline-block" style={{background:c}}/>{l}
+          </span>
+        ))}
+        <span className="ml-auto">Бейдж на даті — прокатів за день (норма {CAP})</span>
+      </div>
+    </div>
+  );
+}
+
+// ── ДРУК ТИЖНЯ ────────────────────────────────────────────────────────────────
+// Аркуш A4 з планом цеху на обраний тиждень: замовлення розкладені по днях,
+// день = будь-яка дата в діапазоні autoStart…autoEnd.
+const WD_NAMES = ['Понеділок','Вівторок','Середа','Четвер','П’ятниця','Субота','Неділя'];
+
+// Понеділок тижня, що містить дату
+function mondayOf(dateStr) {
+  const d = new Date((dateStr || todayStr()) + 'T12:00:00');
+  const shift = (d.getDay() === 0 ? -6 : 1 - d.getDay());
+  d.setDate(d.getDate() + shift);
+  return isoOf(d);
+}
+
+function WeekPrintSheet({orders, monday}) {
+  const days = [];
+  for (let i = 0; i < 7; i++) days.push(addDaysISO(monday, i));
+  const sunday = days[6];
+
+  const inDay = (o, day) => o.status !== 'issued' && o.autoStart && o.autoEnd
+    && o.autoStart <= day && day <= o.autoEnd;
+
+  const byDay = days.map((day, i) => {
+    const list = orders.filter(o => inDay(o, day))
+      .sort((a, b) => (deadlineOf(a) || '').localeCompare(deadlineOf(b) || ''));
+    return {day, name: WD_NAMES[i], weekend: i >= 5, list};
+  });
+
+  const uniq = new Set();
+  for (const g of byDay) for (const o of g.list) uniq.add(o.id);
+  const week = orders.filter(o => uniq.has(o.id));
+  const totalItems = week.reduce((s, o) => s + (o.items || 0), 0);
+  const totalRolls = week.reduce((s, o) => s + (o.rolls || 0), 0);
+
+  return (
+    <div id="week-print">
+      <h1>План друку — тиждень {fmtD(monday)} – {fmtD(sunday)}</h1>
+      <p className="wp-sub">
+        Шовкотрафарет · замовлень: {week.length} · виробів: {totalItems} · прокатів: {totalRolls}
+        {' · '}сформовано {fmtD(todayStr())}
+      </p>
+
+      {byDay.filter(g => g.list.length > 0 || !g.weekend).map(g => (
+        <div className="wp-day" key={g.day}>
+          <div className="wp-dayhead">
+            {g.name}, {fmtD(g.day)}
+            {g.list.length > 0 && (
+              <span className="wp-daysum">
+                {' '}— {g.list.length} зам. · {g.list.reduce((s,o)=>s+(o.items||0),0)} шт
+                {' · '}{g.list.reduce((s,o)=>s+(o.rolls||0),0)} прок.
+              </span>
+            )}
+          </div>
+          {g.list.length === 0
+            ? <div className="wp-empty">немає замовлень</div>
+            : (
+              <table>
+                <thead>
+                  <tr>
+                    <th style={{width:'16mm'}}>№</th>
+                    <th style={{width:'34mm'}}>Компанія</th>
+                    <th style={{width:'30mm'}}>Менеджер</th>
+                    <th style={{width:'12mm'}}>Шт</th>
+                    <th style={{width:'10mm'}}>Кол.</th>
+                    <th>Позиції</th>
+                    <th style={{width:'24mm'}}>Фарба</th>
+                    <th style={{width:'22mm'}}>Готовність</th>
+                    <th style={{width:'20mm'}}>Статус</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {g.list.map(o => {
+                    const od = overdueDays(o);
+                    return (
+                      <tr key={o.id}>
+                        <td>{o.keycrmId ? '#' + o.keycrmId : '—'}</td>
+                        <td>{o.crmCompany || '—'}</td>
+                        <td>{o.crmManager || '—'}</td>
+                        <td>{o.items || 0}</td>
+                        <td>{sumColors(o) || '—'}</td>
+                        <td>{posLabel(o)}</td>
+                        <td>{INK_TYPES[o.inkType]?.label || '—'}</td>
+                        <td className={od > 0 ? 'wp-late' : ''}>
+                          {fmtD(deadlineOf(o))}{od > 0 ? ` (−${od})` : ''}
+                        </td>
+                        <td>{STATUSES[o.status] || o.status}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+        </div>
+      ))}
+
+      <p className="wp-total">
+        Разом за тиждень: {week.length} замовлень · {totalItems} виробів · {totalRolls} прокатів
+      </p>
+    </div>
+  );
+}
+
 // ── QUEUE ─────────────────────────────────────────────────────────────────────
 function Queue() {
-  const {orders,addOrder,updateOrder,deleteOrder} = useContext(OrdersCtx);
+  const {orders,addOrder,updateOrder,deleteOrder,syncFromCRM} = useContext(OrdersCtx);
   const [modal,setModal] = useState(null);
   const [confirmDel,setConfirmDel] = useState(null); // {id, label}
+  const [syncing,setSyncing] = useState(false);
+  const [syncMsg,setSyncMsg] = useState(null); // {ok, text}
+  const [view,setView] = useState(()=>localStorage.getItem('sp_queue_view')||'calendar');
+  useEffect(()=>{ localStorage.setItem('sp_queue_view', view); },[view]);
+  const [weekStart,setWeekStart] = useState(()=>mondayOf(todayStr()));
+
+  // Перетягування/розтягування смуги в календарі → нова дата готовності
+  const moveOrder = useCallback(async (id, newEnd)=>{
+    const o = orders.find(x=>x.id===id);
+    if (!o) return;
+    const wanted = ensureWD(newEnd);
+    await updateOrder(id, {confirmedReadyDate: wanted});
+    const label = o.keycrmId ? `#${o.keycrmId}` : (o.client||id);
+    setSyncMsg({ok:true, text:`${label}: дату готовності змінено на ${fmtD(wanted)}${wanted!==newEnd?' (перенесено на робочий день)':''}`});
+  },[orders, updateOrder]);
+
+  const openOrder = useCallback((id)=>{
+    const o = orders.find(x=>x.id===id);
+    if (o) setModal({order:o});
+  },[orders]);
+
+  async function doSync() {
+    setSyncing(true); setSyncMsg(null);
+    try {
+      const r = await syncFromCRM();
+      setSyncMsg({ok:true, text:`У CRM знайдено ${r.found} · додано ${r.added} · оновлено ${r.updated}`});
+    } catch (e) {
+      setSyncMsg({ok:false, text:`Не вдалося оновити: ${e?.message || e}`});
+    } finally { setSyncing(false); }
+  }
 
   const sorted = useMemo(()=>{
     const toMs = d => d ? new Date(d).getTime() : Infinity;
@@ -615,6 +1092,12 @@ function Queue() {
     });
   },[orders]);
 
+  const weekCount = useMemo(()=>{
+    const from = weekStart, to = addDaysISO(weekStart, 6);
+    return orders.filter(o=>o.status!=='issued' && o.autoStart && o.autoEnd
+      && o.autoStart <= to && o.autoEnd >= from).length;
+  },[orders, weekStart]);
+
   function handleDel(o) {
     const label = [o.keycrmId?`#${o.keycrmId}`:'', o.client||''].filter(Boolean).join(' · ') || o.id;
     setConfirmDel({id: o.id, label});
@@ -624,19 +1107,70 @@ function Queue() {
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold">Черга замовлень</h1>
-        <button onClick={()=>setModal({order:null})} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition-colors">
-          + Додати замовлення
-        </button>
+        <div className="flex gap-2 items-center">
+          <div className="flex bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5 mr-1">
+            {[['calendar','📅 Календар'],['list','📋 Список']].map(([v,l])=>(
+              <button key={v} onClick={()=>setView(v)}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${view===v
+                  ? 'bg-white dark:bg-gray-700 shadow text-blue-600 dark:text-blue-400'
+                  : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}>{l}</button>
+            ))}
+          </div>
+          <button onClick={doSync} disabled={syncing} title={`KeyCRM: статуси ${SYNC_STATUS_IDS.join(', ')} · вид друку «${SYNC_PRINT_TYPE}»`}
+            className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg font-medium text-sm transition-colors">
+            {syncing ? 'Оновлення…' : '🔄 Оновити з CRM'}
+          </button>
+          <button onClick={()=>setModal({order:null})} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition-colors">
+            + Додати замовлення
+          </button>
+        </div>
       </div>
+
+      {syncMsg && (
+        <div className={`p-3 rounded-lg text-sm border ${syncMsg.ok
+          ? 'bg-green-50 dark:bg-green-900/30 border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
+          : 'bg-red-50 dark:bg-red-900/30 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'}`}>
+          {syncMsg.ok ? '✅ ' : '⚠️ '}{syncMsg.text}
+        </div>
+      )}
 
       {sorted.length===0 && (
         <div className="text-center text-gray-400 py-16">
           <p className="text-5xl mb-3">📋</p>
-          <p>Замовлень немає. Натисніть «+ Додати замовлення».</p>
+          <p>Замовлень немає. Натисніть «🔄 Оновити з CRM» або «+ Додати замовлення».</p>
         </div>
       )}
 
-      {sorted.length>0 && (
+      {view==='calendar' && sorted.length>0 && (
+        <>
+          <div className="flex flex-wrap items-center gap-2 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 px-3 py-2">
+            <span className="text-sm font-medium text-gray-600 dark:text-gray-300">Тиждень для друку:</span>
+            <button onClick={()=>setWeekStart(w=>addDaysISO(w,-7))} title="Попередній тиждень"
+              className="px-2 py-1 rounded-md border border-gray-300 dark:border-gray-600 text-sm hover:bg-gray-100 dark:hover:bg-gray-700">◀</button>
+            <input type="date" className="inp w-auto" value={weekStart}
+              onChange={e=>e.target.value && setWeekStart(mondayOf(e.target.value))}/>
+            <button onClick={()=>setWeekStart(w=>addDaysISO(w,7))} title="Наступний тиждень"
+              className="px-2 py-1 rounded-md border border-gray-300 dark:border-gray-600 text-sm hover:bg-gray-100 dark:hover:bg-gray-700">▶</button>
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              {fmtD(weekStart)} – {fmtD(addDaysISO(weekStart,6))}
+              <span className="ml-2 text-gray-400">· {weekCount} зам.</span>
+            </span>
+            <button onClick={()=>setWeekStart(mondayOf(todayStr()))}
+              className="px-2 py-1 rounded-md border border-gray-300 dark:border-gray-600 text-sm hover:bg-gray-100 dark:hover:bg-gray-700">Поточний</button>
+            <button onClick={()=>window.print()} disabled={weekCount===0}
+              className="ml-auto bg-gray-700 hover:bg-gray-800 disabled:bg-gray-300 dark:disabled:bg-gray-600 text-white px-4 py-2 rounded-lg font-medium text-sm transition-colors">
+              🖨 Друк тижня
+            </button>
+          </div>
+          <p className="text-xs text-gray-400">
+            Тягніть смугу — зміниться дата готовності. Правий край тягнеться окремо. Клік — відкрити замовлення.
+          </p>
+          <QueueCalendar orders={orders} onMove={moveOrder} onOpen={openOrder}/>
+          <WeekPrintSheet orders={orders} monday={weekStart}/>
+        </>
+      )}
+
+      {view==='list' && sorted.length>0 && (
         <div className="grid items-center px-4 py-1 text-xs font-semibold text-gray-400 uppercase tracking-wide gap-x-3"
           style={{gridTemplateColumns:'2rem 5rem 1fr 10rem 5rem 4rem 8rem 3rem'}}>
           <span className="text-center">#</span>
@@ -651,13 +1185,15 @@ function Queue() {
         </div>
       )}
 
-      <div className="space-y-2">
-        {sorted.map((o,i)=>(
-          <OrderCard key={o.id} o={o} idx={i+1}
-            onDel={()=>handleDel(o)}
-            onChange={u=>updateOrder(o.id,u)}/>
-        ))}
-      </div>
+      {view==='list' && (
+        <div className="space-y-2">
+          {sorted.map((o,i)=>(
+            <OrderCard key={o.id} o={o} idx={i+1}
+              onDel={()=>handleDel(o)}
+              onChange={u=>updateOrder(o.id,u)}/>
+          ))}
+        </div>
+      )}
 
       {modal && (
         <Modal order={modal.order} onClose={()=>setModal(null)}
@@ -747,11 +1283,12 @@ function OrderCard({o,idx,onDel,onChange}) {
 
   const prLabels = {urgent:'Терміново',week:'Цього тижня',queue:'В черзі'};
 
-  const statusBar = {
+  const od = overdueDays(o);
+  const statusBar = od>0 ? 'border-l-4 border-l-red-500' : ({
     in_progress: 'border-l-4 border-l-blue-500',
     ready:       'border-l-4 border-l-green-500',
     issued:      'border-l-4 border-l-gray-300 dark:border-l-gray-600 opacity-60',
-  }[o.status] || '';
+  }[o.status] || '');
 
   return (
     <div className={`bg-white dark:bg-gray-800 rounded-xl border transition-all ${statusBar} ${expanded?'border-blue-300 dark:border-blue-600 shadow-lg':'border-gray-200 dark:border-gray-700'}`}>
@@ -766,7 +1303,13 @@ function OrderCard({o,idx,onDel,onChange}) {
           : <span className="font-mono text-sm text-gray-400 truncate">—</span>}
         <span className="text-sm text-indigo-400 truncate">{o.crmStatusLabel||'—'}</span>
         <span className="text-sm text-gray-300 truncate">{o.crmManager||'—'}</span>
-        <span className="text-sm text-gray-400">{o.confirmedReadyDate ? fmtDs(o.confirmedReadyDate) : '—'}</span>
+        {od>0
+          ? <span className="text-sm text-red-600 dark:text-red-400 font-semibold leading-tight"
+              title={`Протерміновано на ${od} ${daysWord(od)} — дедлайн ${fmtD(deadlineOf(o))}`}>
+              {fmtDs(deadlineOf(o))}
+              <span className="block text-[10px] font-bold uppercase tracking-wide">⚠ −{od} {daysWord(od)}</span>
+            </span>
+          : <span className="text-sm text-gray-400">{o.confirmedReadyDate ? fmtDs(o.confirmedReadyDate) : '—'}</span>}
         <span className="text-sm text-gray-400">{o.items>0 ? `${o.items} шт` : '—'}</span>
         <span className={`text-sm px-2 py-0.5 rounded-full font-medium text-center ${prChip}`}>{prLabels[o.priority]||o.priority}</span>
         <span className="flex items-center gap-0.5" onClick={e=>e.stopPropagation()}>
@@ -1630,9 +2173,10 @@ function kanbanQrUrl(c) {
 function KanbanCardPreview({card}) {
   const canvasRef = useRef(null);
   const isTransport = card.type === 'transport';
+  const showQr = !isTransport && !card.noQr;   // картка постачання може бути й без QR
 
   useEffect(() => {
-    if (isTransport) return;
+    if (!showQr) return;
     if (!canvasRef.current || typeof QRious === 'undefined') return;
     try {
       new QRious({
@@ -1644,10 +2188,10 @@ function KanbanCardPreview({card}) {
         foreground: '#111827',
       });
     } catch (e) { console.warn('QR error', e); }
-  }, [card.name, card.article, isTransport]);
+  }, [card.name, card.article, showQr]);
 
   return (
-    <div className={`kanban-card${isTransport ? ' is-transport' : ''}`}>
+    <div className={`kanban-card${showQr ? '' : ' is-transport'}`}>
       <div className="kc-head">
         <span>Канбан картка</span>
         {card.article && <span className="kc-head-art">арт. {card.article}</span>}
@@ -1681,30 +2225,62 @@ function KanbanCardPreview({card}) {
 
       <div className="kc-foot">
         <div className="kc-foot-text">
-          {isTransport
-            ? <><strong>Якщо товар скінчився!!!</strong> Не загуби цю картку — поповни запас із зони постачання і повісь її на новий товар</>
-            : 'Якщо до тебе потрапила ця карточка — відскануй QR код і постав цю карточку в коробку Канбан'}
+          {showQr
+            ? 'Якщо до тебе потрапила ця карточка — відскануй QR код і постав цю карточку в коробку Канбан'
+            : isTransport
+              ? <><strong>Якщо товар скінчився!!!</strong> Не загуби цю картку — поповни запас із зони постачання і повісь її на новий товар</>
+              : <><strong>Якщо товар скінчився!!!</strong> Просто кинь цю картку в канбан-пошту</>}
         </div>
-        {!isTransport && <div className="kc-qr"><canvas ref={canvasRef}/></div>}
+        {showQr && <div className="kc-qr"><canvas ref={canvasRef}/></div>}
       </div>
     </div>
   );
 }
 
-// Аптечка — готовий набір карток постачання (постачальник «Аптека», зона «Аптечка», min 1 / max 2)
+// Аптечка — готовий набір карток постачання (постачальник «Аптека», min 1 / max 2, без QR).
+// Дві коробки: №1 — те, що приймають всередину; №2 — рани, опіки, перев'язка.
+const PHARMACY_BOX_1 = 'Аптечка 1 · Ліки';
+const PHARMACY_BOX_2 = 'Аптечка 2 · Рани';
 const PHARMACY_KIT = [
-  'Парацетамол', 'Ібупрофен', 'Аміцитрон', 'Лоперамід', 'Ентеросгель',
-  'Панкреатин', 'Еспумізан', 'Лоратадин', 'Стрепсілс', 'Спазмалгон ДУО',
-  'Перекис водню', 'Пантенол', 'Антистрес', 'Валідол', 'Йод',
-  'Бинти', 'Вата',
+  {name:'Парацетамол',    box:PHARMACY_BOX_1},
+  {name:'Ібупрофен',      box:PHARMACY_BOX_1},
+  {name:'Аміцитрон',      box:PHARMACY_BOX_1},
+  {name:'Лоперамід',      box:PHARMACY_BOX_1},
+  {name:'Ентеросгель',    box:PHARMACY_BOX_1},
+  {name:'Панкреатин',     box:PHARMACY_BOX_1},
+  {name:'Еспумізан',      box:PHARMACY_BOX_1},
+  {name:'Лоратадин',      box:PHARMACY_BOX_1},
+  {name:'Стрепсілс',      box:PHARMACY_BOX_1},
+  {name:'Спазмалгон ДУО', box:PHARMACY_BOX_1},
+  {name:'Но-шпа',         box:PHARMACY_BOX_1},
+  {name:'Антистрес',      box:PHARMACY_BOX_1},
+  {name:'Валідол',        box:PHARMACY_BOX_1},
+  {name:'Перекис водню',  box:PHARMACY_BOX_2},
+  {name:'Пантенол',       box:PHARMACY_BOX_2},
+  {name:'Йод',            box:PHARMACY_BOX_2},
+  {name:'Бинти',          box:PHARMACY_BOX_2},
+  {name:'Вата',           box:PHARMACY_BOX_2},
 ];
 
-const EMPTY_KANBAN_FORM = {type:'supply', name:'', article:'', supplier:'7Office', location:'', min:'', max:''};
+let kanbanIdSeq = 0;
+function newKanbanId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return `k${Date.now().toString(36)}-${(kanbanIdSeq++).toString(36)}-${Math.random().toString(36).slice(2,8)}`;
+}
+
+const EMPTY_KANBAN_FORM = {type:'supply', name:'', article:'', supplier:'7Office', location:'', min:'', max:'', noQr:false};
 
 function Kanban() {
   const [cards, setCards] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(KANBAN_LS_KEY) || '[]'); }
-    catch { return []; }
+    try {
+      const raw = JSON.parse(localStorage.getItem(KANBAN_LS_KEY) || '[]');
+      const seen = new Set();
+      return raw.map(c => {                       // старі картки могли отримати однакові id
+        const id = (!c.id || seen.has(c.id)) ? newKanbanId() : c.id;
+        seen.add(id);
+        return {...c, id};
+      });
+    } catch { return []; }
   });
   const [editing, setEditing] = useState(null);  // null | {...form} | {id, ...}
   const [form, setForm] = useState(EMPTY_KANBAN_FORM);
@@ -1714,7 +2290,7 @@ function Kanban() {
   }, [cards]);
 
   const openNew = (type='supply') => { setForm({...EMPTY_KANBAN_FORM, type}); setEditing('new'); };
-  const openEdit = (c) => { setForm({type:c.type||'supply', name:c.name||'', article:c.article||'', supplier:c.supplier||'', location:c.location||'', min:c.min||'', max:c.max||''}); setEditing(c.id); };
+  const openEdit = (c) => { setForm({type:c.type||'supply', name:c.name||'', article:c.article||'', supplier:c.supplier||'', location:c.location||'', min:c.min||'', max:c.max||'', noQr:!!c.noQr}); setEditing(c.id); };
   const cancel   = () => { setEditing(null); setForm(EMPTY_KANBAN_FORM); };
 
   const save = (e) => {
@@ -1728,10 +2304,10 @@ function Kanban() {
       location: form.location.trim() || undefined,
       min: form.min === '' ? undefined : Number(form.min),
       max: form.max === '' ? undefined : Number(form.max),
+      noQr: form.noQr || undefined,
     };
     if (editing === 'new') {
-      const id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()));
-      setCards([...cards, {id, ...payload, createdAt: new Date().toISOString()}]);
+      setCards([...cards, {id: newKanbanId(), ...payload, createdAt: new Date().toISOString()}]);
     } else {
       setCards(cards.map(c => c.id === editing ? {...c, ...payload} : c));
     }
@@ -1744,14 +2320,19 @@ function Kanban() {
   };
 
   const addPharmacyKit = () => {
-    const existing = new Set(cards.map(c => (c.name || '').trim().toLowerCase()));
-    const fresh = PHARMACY_KIT.filter(n => !existing.has(n.toLowerCase())).map(n => ({
-      id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random())),
-      type: 'supply', name: n, supplier: 'Аптека', location: 'Аптечка', min: 1, max: 2,
-      createdAt: new Date().toISOString(),
+    const props = {type:'supply', supplier:'Аптека', min:1, max:2, noQr:true};
+    const wanted = new Map(PHARMACY_KIT.map(p => [p.name.toLowerCase(), p]));
+    // вже створені картки аптечки — оновлюємо (щоб підхопили коробку, noQr та min/max)
+    const updated = cards.map(c => {
+      const p = wanted.get((c.name||'').trim().toLowerCase());
+      return p ? {...c, ...props, location:p.box} : c;
+    });
+    const existing = new Set(cards.map(c => (c.name||'').trim().toLowerCase()));
+    const fresh = PHARMACY_KIT.filter(p => !existing.has(p.name.toLowerCase())).map(p => ({
+      id: newKanbanId(),
+      name: p.name, ...props, location: p.box, createdAt: new Date().toISOString(),
     }));
-    if (fresh.length === 0) { alert('Усі картки аптечки вже створені'); return; }
-    setCards([...cards, ...fresh]);
+    setCards([...updated, ...fresh]);
   };
 
   const printAll = () => window.print();
@@ -1835,6 +2416,12 @@ function Kanban() {
               <span className="text-xs text-gray-500 dark:text-gray-400">Куди</span>
               <input className="inp mt-1" value={form.location} onChange={e=>setForm({...form, location:e.target.value})} placeholder={form.type==='transport' ? 'Туалет (Поличка 3)' : 'Кухня / Склад / Офіс'}/>
             </label>
+            {form.type==='supply' && (
+              <label className="flex items-center gap-2 sm:col-span-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={form.noQr} onChange={e=>setForm({...form, noQr:e.target.checked})}/>
+                <span>Друкувати без QR-коду</span>
+              </label>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <label className="block">
                 <span className="text-xs text-gray-500 dark:text-gray-400">Min запас</span>
@@ -1938,7 +2525,7 @@ function Sec({title,items}) {
 function TabSystem() {
   return (
     <div>
-      <Sec title="1. Додавання замовлення" items={['Перейдіть до «Черга» → «+ Додати замовлення»','Введіть ID KeyCRM та ім\'я клієнта','Оберіть пріоритет: 🔴 Терміново / 🟡 Цього тижня / 🟢 В черзі','Введіть кількість виробів та кольорів — прокати розраховуються автоматично','Оберіть тип фарби та позицію друку','Відмітьте «Нова розробка» якщо потрібна підготовка трафаретів (+1 день)','Відмітьте «Продукція є» або вкажіть дату надходження','Відмітьте «Файл отримано» якщо дизайн підтверджено']}/>
+      <Sec title="1. Додавання замовлення" items={['«Черга» → «🔄 Оновити з CRM» — підтягує всі замовлення KeyCRM зі статусами 1, 2, 3, 4, 6, 39, 42, де поле «Вид друку» = «Шовкотрафарет» (або є такий тег): нові додаються в чергу, наявним оновлюються дані з CRM','Або вручну: «Черга» → «+ Додати замовлення»','Введіть ID KeyCRM та ім\'я клієнта','Оберіть пріоритет: 🔴 Терміново / 🟡 Цього тижня / 🟢 В черзі','Введіть кількість виробів та кольорів — прокати розраховуються автоматично','Оберіть тип фарби та позицію друку','Відмітьте «Нова розробка» якщо потрібна підготовка трафаретів (+1 день)','Відмітьте «Продукція є» або вкажіть дату надходження','Відмітьте «Файл отримано» якщо дизайн підтверджено']}/>
       <Sec title="2. Управління чергою" items={['Статус змінюється прямо в таблиці: Прийнято → В роботі → Готово → Видано','Пріоритет також редагується inline без відкриття форми','Підтверджена дата вводиться в рядку — це дата, яку повідомляєте клієнту','Видані замовлення виключаються з розрахунку черги']}/>
       <Sec title="3. Логіка розрахунку дат" items={[`Потужність: ${CAP} прокатів/день (робочий день)`,`Прокати = Вироби × Кольори`,`Днів = ⌈Прокати ÷ ${CAP}⌉ + (нова розробка ? 1 : 0)`,'Старт = max(продукція готова, день після завершення попереднього замовлення)','Пріоритет впливає на порядок у черзі — термінові плануються першими','Всі дати у робочих днях (субота, неділя пропускаються)']}/>
       <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-800 rounded-xl p-4">

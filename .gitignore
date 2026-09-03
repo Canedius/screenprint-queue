@@ -1,2 +1,15 @@
 .DS_Store
 Thumbs.db
+
+# Локальні налаштування Claude Code — містять API-ключі, не для репозиторію
+.claude/
+memory/
+
+# Резервні копії та тимчасові файли редактора
+*.bak
+*.tmp
+index.html.tmp.*
+
+# Одноразові скрипти-патчі
+fix2.js
+fix_products.js
