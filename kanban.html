@@ -191,9 +191,12 @@ const PRODUCT_CATALOG = [
 
 const KANBAN_LOCATIONS = ['Склад', 'Кухня', 'Туалет'];
 
-// Скільки замовити — лише явно задане значення. Без нього QR не несе qty, і n8n бере кількість зі своєї таблиці
+// Картку сканують, коли запас дійшов до min, тож замовляємо до max: max − min.
+// Без коректних min/max QR не несе qty, і n8n бере кількість зі своєї таблиці
 function orderQty(c) {
-  return (c.qty != null && c.qty !== '' && Number(c.qty) > 0) ? Number(c.qty) : undefined;
+  if (c.min == null || c.max == null || c.min === '' || c.max === '') return undefined;
+  const diff = Number(c.max) - Number(c.min);
+  return diff > 0 ? diff : undefined;
 }
 
 // Власні товари, додані на цій сторінці (зберігаються в браузері поруч із картками)
@@ -307,7 +310,7 @@ function loadCards() {
 // Картка транспортування переносить товар зі складу, тому за замовчуванням постачальник — «Склад»
 const DEFAULT_SUPPLIER = {supply:'7Office', transport:'Склад'};
 
-const EMPTY_KANBAN_FORM ={type:'supply', name:'', article:'', supplier:'7Office', location:'', min:'', max:'', qty:'', noQr:false};
+const EMPTY_KANBAN_FORM ={type:'supply', name:'', article:'', supplier:'7Office', location:'', min:'', max:'', noQr:false};
 
 function App() {
   const [dark, setDark] = useState(() => {
@@ -356,7 +359,7 @@ function App() {
     ...f, type,
     supplier: (!f.supplier.trim() || f.supplier === DEFAULT_SUPPLIER[f.type]) ? DEFAULT_SUPPLIER[type] : f.supplier,
   }));
-  const openEdit = (c) => { setForm({type:c.type||'supply', name:c.name||'', article:c.article||'', supplier:c.supplier||'', location:c.location||'', min:c.min ?? '', max:c.max ?? '', qty:c.qty ?? '', noQr:!!c.noQr}); setEditing(c.id); };
+  const openEdit = (c) => { setForm({type:c.type||'supply', name:c.name||'', article:c.article||'', supplier:c.supplier||'', location:c.location||'', min:c.min ?? '', max:c.max ?? '', noQr:!!c.noQr}); setEditing(c.id); };
   const cancel   = () => { setEditing(null); setForm(EMPTY_KANBAN_FORM); };
 
   const save = (e) => {
@@ -370,7 +373,6 @@ function App() {
       location: form.location.trim() || undefined,
       min: form.min === '' ? undefined : Number(form.min),
       max: form.max === '' ? undefined : Number(form.max),
-      qty: form.qty === '' ? undefined : Number(form.qty),
       noQr: form.noQr || undefined,
     };
     if (editing === 'new') {
@@ -448,7 +450,7 @@ function App() {
           <p className="font-semibold mb-1">Як це працює</p>
           <ol className="list-decimal ml-5 space-y-0.5 text-blue-800 dark:text-blue-300">
             <li>Створи картку для товару, який треба контролювати (Domestos, кава, рукавички тощо)</li>
-            <li>«Замовити, шт» — кількість, яку QR передасть у запит</li>
+            <li>Вкажи min і max — QR замовить різницю max − min</li>
             <li>Друкуй A4-аркуш і ламінуй — 10 карток на сторінці (85×55 мм)</li>
             <li>Коли запас дійшов до min — скануй QR: запит автоматично потрапить у замовлення</li>
           </ol>
@@ -547,7 +549,7 @@ function App() {
                       )}
                     </div>
                   </label>
-                  <div className="grid grid-cols-3 gap-3 sm:col-span-2">
+                  <div className="grid grid-cols-2 gap-3 sm:col-span-2">
                     <label className="block">
                       <span className="text-xs text-gray-500 dark:text-gray-400">Min запас</span>
                       <input type="number" min="0" className="inp mt-1" value={form.min} onChange={e=>setForm({...form, min:e.target.value})}/>
@@ -555,11 +557,6 @@ function App() {
                     <label className="block">
                       <span className="text-xs text-gray-500 dark:text-gray-400">Max запас</span>
                       <input type="number" min="0" className="inp mt-1" value={form.max} onChange={e=>setForm({...form, max:e.target.value})}/>
-                    </label>
-                    <label className="block">
-                      <span className="text-xs text-gray-500 dark:text-gray-400">Замовити, шт {form.type==='supply' && <span className="text-gray-400">(в QR)</span>}</span>
-                      <input type="number" min="1" className="inp mt-1" value={form.qty} onChange={e=>setForm({...form, qty:e.target.value})}
-                        placeholder="з n8n"/>
                     </label>
                   </div>
                   {form.type==='supply' && (
