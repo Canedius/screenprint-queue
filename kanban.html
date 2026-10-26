@@ -277,8 +277,8 @@ function KanbanCardPreview({card}) {
           {showQr
             ? 'Якщо до тебе потрапила ця карточка — відскануй QR код і постав цю карточку в коробку Канбан'
             : isTransport
-              ? <><strong>Якщо товар скінчився!!!</strong> Не загуби цю картку — поповни запас із зони постачання і повісь її на новий товар</>
-              : <><strong>Якщо товар скінчився!!!</strong> Просто кинь цю картку в канбан-пошту</>}
+              ? <span><strong>Якщо товар скінчився!!!</strong> Не загуби цю картку — поповни запас із зони постачання і повісь її на новий товар</span>
+              : <span><strong>Якщо товар скінчився!!!</strong> Просто кинь цю картку в канбан-пошту</span>}
         </div>
         {showQr && <div className="kc-qr"><canvas ref={canvasRef}/></div>}
       </div>
@@ -304,7 +304,10 @@ function loadCards() {
   } catch { return []; }
 }
 
-const EMPTY_KANBAN_FORM = {type:'supply', name:'', article:'', supplier:'7Office', location:'', min:'', max:'', qty:'', noQr:false};
+// Картка транспортування переносить товар зі складу, тому за замовчуванням постачальник — «Склад»
+const DEFAULT_SUPPLIER = {supply:'7Office', transport:'Склад'};
+
+const EMPTY_KANBAN_FORM ={type:'supply', name:'', article:'', supplier:'7Office', location:'', min:'', max:'', qty:'', noQr:false};
 
 function App() {
   const [dark, setDark] = useState(() => {
@@ -347,7 +350,12 @@ function App() {
     try { localStorage.setItem(KANBAN_LS_KEY, JSON.stringify(cards)); } catch {}
   }, [cards]);
 
-  const openNew  = (type='supply') => { setForm({...EMPTY_KANBAN_FORM, type}); setEditing('new'); };
+  const openNew  = (type='supply') => { setForm({...EMPTY_KANBAN_FORM, type, supplier: DEFAULT_SUPPLIER[type]}); setEditing('new'); };
+  // Перемикаючи тип, міняємо постачальника лише якщо там стоїть типовий для попереднього типу
+  const setType  = (type) => setForm(f => ({
+    ...f, type,
+    supplier: (!f.supplier.trim() || f.supplier === DEFAULT_SUPPLIER[f.type]) ? DEFAULT_SUPPLIER[type] : f.supplier,
+  }));
   const openEdit = (c) => { setForm({type:c.type||'supply', name:c.name||'', article:c.article||'', supplier:c.supplier||'', location:c.location||'', min:c.min ?? '', max:c.max ?? '', qty:c.qty ?? '', noQr:!!c.noQr}); setEditing(c.id); };
   const cancel   = () => { setEditing(null); setForm(EMPTY_KANBAN_FORM); };
 
@@ -453,11 +461,11 @@ function App() {
               <div className="flex-1 space-y-3">
                 <h2 className="font-bold text-lg">{editing === 'new' ? 'Нова картка' : 'Редагувати картку'}</h2>
                 <div className="flex gap-2 text-sm flex-wrap">
-                  <button type="button" onClick={()=>setForm({...form, type:'supply'})}
+                  <button type="button" onClick={()=>setType('supply')}
                     className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${form.type==='supply'?'bg-red-600 text-white':'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}>
                     📦 Постачання (з QR)
                   </button>
-                  <button type="button" onClick={()=>setForm({...form, type:'transport'})}
+                  <button type="button" onClick={()=>setType('transport')}
                     className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${form.type==='transport'?'bg-blue-600 text-white':'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}>
                     🚛 Транспортування (без QR)
                   </button>
