@@ -86,7 +86,7 @@
     .kanban-card .kc-l-green  { background: #6aa84f; color: #fff; font-weight: 600; }
     .kanban-card .kc-minmax {
       display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
+      grid-template-columns: 1fr 1fr;
       border-top: 0.5pt solid #000;
     }
     .kanban-card .kc-minmax > div { display: grid; grid-template-rows: 3.5mm 1fr; }
@@ -94,7 +94,6 @@
     .kanban-card .kc-minmax .kc-mm-h {
       background: #6aa84f; color: #fff; font-weight: 700; font-size: 8pt; text-align: center; padding: 0; line-height: 3.5mm;
     }
-    .kanban-card .kc-minmax .kc-mm-h.kc-order { background: #c00000; }
     .kanban-card .kc-minmax .kc-mm-v {
       text-align: center; font-weight: 700; font-size: 12pt; padding: 0.5mm 0 0;
       display: flex; align-items: center; justify-content: center;
@@ -224,7 +223,6 @@ function KanbanCardPreview({card}) {
   const isTransport = card.type === 'transport';
   const showQr = !isTransport && !card.noQr;   // картка постачання може бути й без QR
   const qrUrl = kanbanQrUrl(card);
-  const qty = orderQty(card);
 
   useEffect(() => {
     if (!showQr) return;
@@ -271,10 +269,6 @@ function KanbanCardPreview({card}) {
         <div>
           <div className="kc-mm-h">max</div>
           <div className="kc-mm-v">{card.max ?? '—'}</div>
-        </div>
-        <div>
-          <div className="kc-mm-h kc-order">замовити</div>
-          <div className="kc-mm-v">{qty ?? '—'}</div>
         </div>
       </div>
 
