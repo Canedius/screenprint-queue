@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Канбан-картки</title>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+  <script>
+    // JSX → React.createElement (classic runtime), бо React підключено як UMD-глобал
+    Babel.registerPreset('react-classic', {
+      presets: [[Babel.availablePresets['react'], { runtime: 'classic' }]],
+    });
+  </script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = { darkMode: 'class' }</script>
+  <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
+  <style>
+    body { background: #f9fafb; }
+    .dark body { background: #111827; }
+    .inp {
+      width: 100%;
+      padding: 0.5rem 0.75rem;
+      border: 1px solid #d1d5db;
+      border-radius: 0.5rem;
+      background: white;
+      font-size: 0.875rem;
+      transition: border-color 0.15s;
+      color: #111827;
+    }
+    .inp:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,.15); }
+    .dark .inp { background: #374151; border-color: #4b5563; color: #f3f4f6; }
+    .dark .inp:focus { border-color: #60a5fa; }
+
+    /* Kanban card — physical size 85×55 mm (standard business-card), spreadsheet-style */
+    .kanban-card {
+      width: 85mm;
+      height: 55mm;
+      box-sizing: border-box;
+      background: #fff;
+      color: #111827;
+      border: 0.5pt solid #000;
+      display: grid;
+      grid-template-rows: 5mm 4mm 4mm 4mm 12mm 26mm;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 9pt;
+      line-height: 1.2;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .kanban-card * {
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .kanban-card .kc-head {
+      background: #c00000;
+      color: #fff;
+      font-weight: 700;
+      font-size: 10pt;
+      text-align: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 2mm;
+      letter-spacing: 0.3pt;
+    }
+    .kanban-card .kc-head-art {
+      font-size: 8pt;
+      font-weight: 600;
+      font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+      opacity: 0.95;
+      letter-spacing: 0;
+    }
+    .kanban-card .kc-row {
+      display: grid;
+      grid-template-columns: 25mm 1fr;
+      border-top: 0.5pt solid #000;
+      font-size: 8pt;
+    }
+    .kanban-card .kc-row > div { padding: 0.5mm 1.2mm; display: flex; align-items: center; justify-content: center; text-align: center; white-space: nowrap; overflow: hidden; }
+    .kanban-card .kc-row > div + div { border-left: 0.5pt solid #000; font-weight: 600; }
+    .kanban-card .kc-l-blue   { background: #4a90d9; color: #fff; font-weight: 600; }
+    .kanban-card .kc-l-yellow { background: #ffd966; color: #111; font-weight: 600; }
+    .kanban-card .kc-l-green  { background: #6aa84f; color: #fff; font-weight: 600; }
+    .kanban-card .kc-minmax {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      border-top: 0.5pt solid #000;
+    }
+    .kanban-card .kc-minmax > div { display: grid; grid-template-rows: 3.5mm 1fr; }
+    .kanban-card .kc-minmax > div + div { border-left: 0.5pt solid #000; }
+    .kanban-card .kc-minmax .kc-mm-h {
+      background: #6aa84f; color: #fff; font-weight: 700; font-size: 8pt; text-align: center; padding: 0; line-height: 3.5mm;
+    }
+    .kanban-card .kc-minmax .kc-mm-h.kc-order { background: #c00000; }
+    .kanban-card .kc-minmax .kc-mm-v {
+      text-align: center; font-weight: 700; font-size: 12pt; padding: 0.5mm 0 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .kanban-card .kc-foot {
+      display: grid;
+      grid-template-columns: 1fr 23mm;
+      background: #fff2cc;
+      border-top: 0.5pt solid #000;
+    }
+    .kanban-card.is-transport .kc-foot { grid-template-columns: 1fr; }
+    .kanban-card.is-transport .kc-foot-text { font-size: 7pt; padding: 1.5mm 2mm; }
+    .kanban-card .kc-foot-text {
+      padding: 1.2mm 1.5mm;
+      color: #c00000;
+      font-size: 6.5pt;
+      font-weight: 600;
+      line-height: 1.2;
+      display: flex;
+      align-items: center;
+      text-align: center;
+      justify-content: center;
+    }
+    .kanban-card .kc-qr {
+      width: 100%;
+      height: 100%;
+      background: #fff;
+      border-left: 0.5pt solid #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      overflow: hidden;
+    }
+    .kanban-card .kc-qr canvas {
+      width: 22mm !important;
+      height: 22mm !important;
+      display: block;
+    }
+
+    /* Аркуш друку тримаємо змонтованим за екраном, щоб QR-канвас встиг відмалюватись */
+    #print-sheet {
+      position: absolute;
+      left: -10000px;
+      top: 0;
+      display: grid;
+      grid-template-columns: 85mm 85mm;
+      grid-auto-rows: 55mm;
+      gap: 4mm 4mm;
+    }
+
+    @media print {
+      @page { size: A4; margin: 8mm; }
+      body * { visibility: hidden; }
+      #print-sheet, #print-sheet * { visibility: visible; }
+      #print-sheet { left: 0 !important; top: 0 !important; }
+      .kanban-card { page-break-inside: avoid; box-shadow: none; }
+    }
+  </style>
+</head>
+<body class="antialiased">
+<div id="root"></div>
+<script type="text/babel" data-presets="react-classic">
+const { useState, useEffect, useRef } = React;
+
+const KANBAN_WEBHOOK = 'https://pngstudio.app.n8n.cloud/webhook/e8d4ece1-0b5f-4640-87dc-42925b37a4e3';
+// Той самий ключ, що й у вкладці «Канбан» на index.html — картки спільні (один домен GitHub Pages)
+const KANBAN_LS_KEY  = 'screenprint_kanban_cards_v1';
+
+// Каталог товарів — обираєш зі списку, артикул і назва підставляються автоматично
+const PRODUCT_CATALOG = [
+  { sku: '009587',   name: 'Губки кухонні HoReCa Line 90x58x28 мм' },
+  { sku: '012343',   name: 'DOMESTOS Хвойна Свіжість 1 л' },
+  { sku: '317155',   name: 'Mr.Muscle 500 мл зелений розпилювач' },
+  { sku: '50309',    name: 'Туалетний папір Кохавинка з втулкою' },
+  { sku: '25472700', name: 'Крем-мило з бальзамом PRO SERVICE Молоко та мед' },
+  { sku: '16113100', name: 'Пакети для сміття ProService 60 л' },
+  { sku: '16112800', name: 'Пакети для сміття ProService 35 л' },
+  { sku: '30064430', name: 'Серветки вологі для прибирання Solo Ultra Power Кедр та жасмин' },
+  { sku: '450187',   name: 'Рушники паперові Кохавинка' },
+  { sku: '391302',   name: 'Кава розчинна' },
+  { sku: '13274',    name: 'Цукор Діамант білий кристалічний' },
+  { sku: '382676',   name: 'Кава Даллмайр' },
+  { sku: '132439',   name: 'Сухі вершки Nestle Coffee-Mate' },
+  { sku: '879655',   name: 'Чай в пакетиках LOVARE' },
+  { sku: '801841',   name: 'Чай в пакетиках Tess Pleasure' },
+  { sku: '81743692', name: 'Засіб для миття посуду FAIRY Зелене Яблуко' },
+  { sku: '16.4949',  name: 'Папір офісний А4 100 арк' },
+  { sku: '75139',    name: 'Серветки косметичні звичайні' },
+  { sku: '612788',   name: 'Цукерки БімБом' },
+  { sku: '81713197', name: 'Засіб для миття підлоги Mr Proper лимон' },
+  { sku: '13672',    name: 'Рукавички гумові' },
+  { sku: '310453',   name: 'Запаска до валика для чищення' },
+];
+
+const KANBAN_LOCATIONS = ['Склад', 'Кухня', 'Туалет'];
+
+// Скільки замовити — лише явно задане значення. Без нього QR не несе qty, і n8n бере кількість зі своєї таблиці
+function orderQty(c) {
+  return (c.qty != null && c.qty !== '' && Number(c.qty) > 0) ? Number(c.qty) : undefined;
+}
+
+function kanbanQrUrl(c) {
+  const p = new URLSearchParams();
+  if (c.article) p.set('article', c.article);
+  else if (c.name) p.set('name', c.name);
+  const qty = orderQty(c);
+  if (qty) p.set('qty', String(qty));
+  return `${KANBAN_WEBHOOK}?${p.toString()}`;
+}
+
+function KanbanCardPreview({card}) {
+  const canvasRef = useRef(null);
+  const isTransport = card.type === 'transport';
+  const showQr = !isTransport && !card.noQr;   // картка постачання може бути й без QR
+  const qrUrl = kanbanQrUrl(card);
+  const qty = orderQty(card);
+
+  useEffect(() => {
+    if (!showQr) return;
+    if (!canvasRef.current || typeof QRious === 'undefined') return;
+    try {
+      new QRious({
+        element: canvasRef.current,
+        value: qrUrl,
+        size: 360,
+        level: 'M',
+        background: '#ffffff',
+        foreground: '#111827',
+      });
+    } catch (e) { console.warn('QR error', e); }
+  }, [qrUrl, showQr]);
+
+  return (
+    <div className={`kanban-card${showQr ? '' : ' is-transport'}`}>
+      <div className="kc-head">
+        <span>Канбан картка</span>
+        {card.article && <span className="kc-head-art">арт. {card.article}</span>}
+      </div>
+
+      <div className="kc-row">
+        <div className="kc-l-blue">Назва товару</div>
+        <div>{card.name || '—'}</div>
+      </div>
+
+      <div className="kc-row">
+        <div className="kc-l-yellow">Постачальник</div>
+        <div>{card.supplier || '—'}</div>
+      </div>
+
+      <div className="kc-row">
+        <div className="kc-l-green">Куди</div>
+        <div>{card.location || '—'}</div>
+      </div>
+
+      <div className="kc-minmax">
+        <div>
+          <div className="kc-mm-h">min</div>
+          <div className="kc-mm-v">{card.min ?? '—'}</div>
+        </div>
+        <div>
+          <div className="kc-mm-h">max</div>
+          <div className="kc-mm-v">{card.max ?? '—'}</div>
+        </div>
+        <div>
+          <div className="kc-mm-h kc-order">замовити</div>
+          <div className="kc-mm-v">{qty ?? '—'}</div>
+        </div>
+      </div>
+
+      <div className="kc-foot">
+        <div className="kc-foot-text">
+          {showQr
+            ? 'Якщо до тебе потрапила ця карточка — відскануй QR код і постав цю карточку в коробку Канбан'
+            : isTransport
+              ? <><strong>Якщо товар скінчився!!!</strong> Не загуби цю картку — поповни запас із зони постачання і повісь її на новий товар</>
+              : <><strong>Якщо товар скінчився!!!</strong> Просто кинь цю картку в канбан-пошту</>}
+        </div>
+        {showQr && <div className="kc-qr"><canvas ref={canvasRef}/></div>}
+      </div>
+    </div>
+  );
+}
+
+let kanbanIdSeq = 0;
+function newKanbanId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return `k${Date.now().toString(36)}-${(kanbanIdSeq++).toString(36)}-${Math.random().toString(36).slice(2,8)}`;
+}
+
+function loadCards() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(KANBAN_LS_KEY) || '[]');
+    const seen = new Set();
+    return raw.map(c => {
+      const id = (!c.id || seen.has(c.id)) ? newKanbanId() : c.id;
+      seen.add(id);
+      return {...c, id};
+    });
+  } catch { return []; }
+}
+
+const EMPTY_KANBAN_FORM = {type:'supply', name:'', article:'', supplier:'7Office', location:'', min:'', max:'', qty:'', noQr:false};
+
+function App() {
+  const [dark, setDark] = useState(() => {
+    try { return localStorage.getItem('sp_theme') === 'dark'; } catch { return false; }
+  });
+  const [cards, setCards] = useState(loadCards);
+  const [editing, setEditing] = useState(null);  // null | 'new' | id
+  const [form, setForm] = useState(EMPTY_KANBAN_FORM);
+  const importRef = useRef(null);
+
+  useEffect(() => {
+    try { localStorage.setItem('sp_theme', dark ? 'dark' : 'light'); } catch {}
+    document.documentElement.classList.toggle('dark', dark);
+  }, [dark]);
+
+  useEffect(() => {
+    try { localStorage.setItem(KANBAN_LS_KEY, JSON.stringify(cards)); } catch {}
+  }, [cards]);
+
+  const openNew  = (type='supply') => { setForm({...EMPTY_KANBAN_FORM, type}); setEditing('new'); };
+  const openEdit = (c) => { setForm({type:c.type||'supply', name:c.name||'', article:c.article||'', supplier:c.supplier||'', location:c.location||'', min:c.min ?? '', max:c.max ?? '', qty:c.qty ?? '', noQr:!!c.noQr}); setEditing(c.id); };
+  const cancel   = () => { setEditing(null); setForm(EMPTY_KANBAN_FORM); };
+
+  const save = (e) => {
+    e?.preventDefault();
+    if (!form.name.trim()) return;
+    const payload = {
+      type: form.type === 'transport' ? 'transport' : 'supply',
+      name: form.name.trim(),
+      article: form.article.trim() || undefined,
+      supplier: form.supplier.trim() || undefined,
+      location: form.location.trim() || undefined,
+      min: form.min === '' ? undefined : Number(form.min),
+      max: form.max === '' ? undefined : Number(form.max),
+      qty: form.qty === '' ? undefined : Number(form.qty),
+      noQr: form.noQr || undefined,
+    };
+    if (editing === 'new') {
+      setCards([...cards, {id: newKanbanId(), ...payload, createdAt: new Date().toISOString()}]);
+    } else {
+      setCards(cards.map(c => c.id === editing ? {...c, ...payload} : c));
+    }
+    cancel();
+  };
+
+  const remove = (id) => {
+    if (!confirm('Видалити картку?')) return;
+    setCards(cards.filter(c => c.id !== id));
+  };
+
+  const exportJson = () => {
+    const blob = new Blob([JSON.stringify(cards, null, 2)], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `kanban-cards-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const importJson = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    file.text().then(text => {
+      const list = JSON.parse(text);
+      if (!Array.isArray(list)) throw new Error('not array');
+      const ids = new Set(cards.map(c => c.id));
+      const fresh = list.filter(c => c && c.name).map(c => (!c.id || ids.has(c.id)) ? {...c, id: newKanbanId()} : c);
+      setCards([...cards, ...fresh]);
+      alert(`Імпортовано карток: ${fresh.length}`);
+    }).catch(() => alert('Не вдалося прочитати файл — потрібен JSON, збережений кнопкою «Експорт»'));
+  };
+
+  const btn = 'px-4 py-2 rounded-lg text-sm font-medium transition-colors';
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+        <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between gap-3">
+          <span className="font-bold text-red-600 dark:text-red-400">🗂 Канбан-картки</span>
+          <div className="flex items-center gap-1">
+            <a href="./" className="text-sm px-3 py-1.5 rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">← Черга</a>
+            <button onClick={()=>setDark(!dark)} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700">{dark?'☀️':'🌙'}</button>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-6xl mx-auto px-4 py-5 space-y-5">
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={()=>openNew('supply')} className={`${btn} bg-red-600 hover:bg-red-700 text-white`}>+ Картка постачання</button>
+          <button onClick={()=>openNew('transport')} className={`${btn} bg-blue-600 hover:bg-blue-700 text-white`}>+ Картка транспортування</button>
+          <button onClick={()=>window.print()} disabled={cards.length === 0}
+            className={`${btn} bg-gray-700 hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed text-white`}>
+            🖨 Друкувати всі ({cards.length})
+          </button>
+          <span className="flex-1"/>
+          <button onClick={exportJson} disabled={cards.length === 0}
+            className={`${btn} bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-40`}>⬇ Експорт</button>
+          <button onClick={()=>importRef.current?.click()}
+            className={`${btn} bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600`}>⬆ Імпорт</button>
+          <input ref={importRef} type="file" accept="application/json,.json" className="hidden" onChange={importJson}/>
+        </div>
+
+        <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-xl p-4 text-sm text-blue-900 dark:text-blue-200">
+          <p className="font-semibold mb-1">Як це працює</p>
+          <ol className="list-decimal ml-5 space-y-0.5 text-blue-800 dark:text-blue-300">
+            <li>Створи картку для товару, який треба контролювати (Domestos, кава, рукавички тощо)</li>
+            <li>«Замовити, шт» — кількість, яку QR передасть у запит. Порожнє поле — n8n візьме кількість зі своєї таблиці</li>
+            <li>Друкуй A4-аркуш і ламінуй — 10 карток на сторінці (85×55 мм)</li>
+            <li>Коли запас дійшов до min — скануй QR: запит автоматично потрапить у замовлення</li>
+          </ol>
+          <p className="mt-2 text-xs text-blue-700 dark:text-blue-400">Картки зберігаються в цьому браузері. Щоб перенести на інший комп'ютер — «Експорт» / «Імпорт».</p>
+        </div>
+
+        {editing && (
+          <form onSubmit={save} className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
+            <div className="flex flex-col lg:flex-row gap-6">
+              <div className="flex-1 space-y-3">
+                <h2 className="font-bold text-lg">{editing === 'new' ? 'Нова картка' : 'Редагувати картку'}</h2>
+                <div className="flex gap-2 text-sm flex-wrap">
+                  <button type="button" onClick={()=>setForm({...form, type:'supply'})}
+                    className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${form.type==='supply'?'bg-red-600 text-white':'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}>
+                    📦 Постачання (з QR)
+                  </button>
+                  <button type="button" onClick={()=>setForm({...form, type:'transport'})}
+                    className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${form.type==='transport'?'bg-blue-600 text-white':'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}>
+                    🚛 Транспортування (без QR)
+                  </button>
+                </div>
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <label className="block sm:col-span-2">
+                    <span className="text-xs text-gray-500 dark:text-gray-400">Обрати з каталогу</span>
+                    <select className="inp mt-1" value={PRODUCT_CATALOG.find(p=>p.name===form.name && p.sku===form.article) ? form.article : ''}
+                      onChange={e=>{
+                        const p = PRODUCT_CATALOG.find(x=>x.sku===e.target.value);
+                        if (p) setForm({...form, name:p.name, article:p.sku});
+                      }}>
+                      <option value="">— з каталогу: автозаповнить назву + артикул —</option>
+                      {PRODUCT_CATALOG.map(p=>(
+                        <option key={p.sku} value={p.sku}>{p.name} ({p.sku})</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block sm:col-span-2">
+                    <span className="text-xs text-gray-500 dark:text-gray-400">Назва товару *</span>
+                    <input className="inp mt-1" required value={form.name} onChange={e=>setForm({...form, name:e.target.value})} placeholder="напр. Domestos Хвойна Свіжість 1 л"/>
+                  </label>
+                  <label className="block">
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      Артикул {form.type==='supply' && <span className="text-gray-400">(в QR)</span>}
+                    </span>
+                    <input className="inp mt-1 font-mono" value={form.article} onChange={e=>setForm({...form, article:e.target.value})} placeholder="012343"/>
+                  </label>
+                  <label className="block">
+                    <span className="text-xs text-gray-500 dark:text-gray-400">Постачальник</span>
+                    <input className="inp mt-1" value={form.supplier} onChange={e=>setForm({...form, supplier:e.target.value})} placeholder="Metro / 7Office"/>
+                  </label>
+                  <label className="block sm:col-span-2">
+                    <span className="text-xs text-gray-500 dark:text-gray-400">Куди</span>
+                    <div className="flex gap-2 mt-1">
+                      <select className="inp" value={KANBAN_LOCATIONS.includes(form.location) ? form.location : (form.location ? '__other' : '')}
+                        onChange={e=>setForm({...form, location: e.target.value === '__other' ? ' ' : e.target.value})}>
+                        <option value="">— не вказано —</option>
+                        {KANBAN_LOCATIONS.map(l => <option key={l} value={l}>{l}</option>)}
+                        <option value="__other">інше…</option>
+                      </select>
+                      {form.location && !KANBAN_LOCATIONS.includes(form.location) && (
+                        <input className="inp" autoFocus value={form.location.trimStart()} onChange={e=>setForm({...form, location:e.target.value || ' '})} placeholder="напр. Туалет (Поличка 3)"/>
+                      )}
+                    </div>
+                  </label>
+                  <div className="grid grid-cols-3 gap-3 sm:col-span-2">
+                    <label className="block">
+                      <span className="text-xs text-gray-500 dark:text-gray-400">Min запас</span>
+                      <input type="number" min="0" className="inp mt-1" value={form.min} onChange={e=>setForm({...form, min:e.target.value})}/>
+                    </label>
+                    <label className="block">
+                      <span className="text-xs text-gray-500 dark:text-gray-400">Max запас</span>
+                      <input type="number" min="0" className="inp mt-1" value={form.max} onChange={e=>setForm({...form, max:e.target.value})}/>
+                    </label>
+                    <label className="block">
+                      <span className="text-xs text-gray-500 dark:text-gray-400">Замовити, шт {form.type==='supply' && <span className="text-gray-400">(в QR)</span>}</span>
+                      <input type="number" min="1" className="inp mt-1" value={form.qty} onChange={e=>setForm({...form, qty:e.target.value})}
+                        placeholder="з n8n"/>
+                    </label>
+                  </div>
+                  {form.type==='supply' && (
+                    <label className="flex items-center gap-2 sm:col-span-2 text-sm cursor-pointer">
+                      <input type="checkbox" checked={form.noQr} onChange={e=>setForm({...form, noQr:e.target.checked})}/>
+                      <span>Друкувати без QR-коду</span>
+                    </label>
+                  )}
+                </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  <button type="button" onClick={cancel} className={`${btn} bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600`}>Скасувати</button>
+                  <button type="submit" className={`${btn} bg-blue-600 hover:bg-blue-700 text-white`}>Зберегти</button>
+                </div>
+              </div>
+              <div className="lg:w-auto space-y-2">
+                <p className="text-xs text-gray-500 dark:text-gray-400">Попередній перегляд</p>
+                <div className="overflow-x-auto"><KanbanCardPreview card={form}/></div>
+                {form.type==='supply' && !form.noQr && (
+                  <p className="text-xs text-gray-500 dark:text-gray-400 break-all max-w-[85mm] font-mono">{kanbanQrUrl(form)}</p>
+                )}
+              </div>
+            </div>
+          </form>
+        )}
+
+        {cards.length === 0 ? (
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-dashed border-gray-300 dark:border-gray-600 p-10 text-center text-gray-500 dark:text-gray-400">
+            <div className="text-4xl mb-2">🗂</div>
+            <p>Карток ще немає. Створи першу — натисни <span className="font-semibold">«+ Картка постачання»</span> або <span className="font-semibold">«+ Картка транспортування»</span>.</p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {[
+              {key:'supply',    title:'📦 Картки постачання',     accent:'text-red-700 dark:text-red-400'},
+              {key:'transport', title:'🚛 Картки транспортування', accent:'text-blue-700 dark:text-blue-400'},
+            ].map(group => {
+              const list = cards.filter(c => (c.type || 'supply') === group.key);
+              if (list.length === 0) return null;
+              return (
+                <div key={group.key}>
+                  <h2 className={`text-lg font-bold mb-3 ${group.accent}`}>{group.title} <span className="text-sm font-normal text-gray-500">({list.length})</span></h2>
+                  <div className="grid gap-4" style={{gridTemplateColumns:'repeat(auto-fill, minmax(85mm, 1fr))'}}>
+                    {list.map(c => (
+                      <div key={c.id} className="flex flex-col items-start gap-2 overflow-x-auto">
+                        <KanbanCardPreview card={c}/>
+                        <div className="flex gap-2 text-xs">
+                          <button onClick={()=>openEdit(c)} className="px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600">✏ Редагувати</button>
+                          <button onClick={()=>remove(c.id)} className="px-2 py-1 rounded bg-red-50 dark:bg-red-950 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900">🗑 Видалити</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </main>
+
+      {/* Прихований аркуш друку — змонтований, щоб QR-канваси відмалювались */}
+      <div id="print-sheet">
+        {cards.map(c => <KanbanCardPreview key={`print-${c.id}`} card={c}/>)}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
