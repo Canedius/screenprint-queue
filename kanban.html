@@ -197,10 +197,23 @@ function orderQty(c) {
   return (c.qty != null && c.qty !== '' && Number(c.qty) > 0) ? Number(c.qty) : undefined;
 }
 
+// Власні товари, додані на цій сторінці (зберігаються в браузері поруч із картками)
+const CATALOG_LS_KEY = 'screenprint_kanban_catalog_v1';
+const BUILTIN_SKUS = new Set(PRODUCT_CATALOG.map(p => p.sku));
+const catalogKey = (p) => `${p.sku || ''}|${p.name}`;
+
+function loadCustomCatalog() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CATALOG_LS_KEY) || '[]');
+    return Array.isArray(raw) ? raw.filter(p => p && p.name) : [];
+  } catch { return []; }
+}
+
 function kanbanQrUrl(c) {
   const p = new URLSearchParams();
   if (c.article) p.set('article', c.article);
-  else if (c.name) p.set('name', c.name);
+  // n8n знає назви лише для вбудованого каталогу — для нового товару шлемо й назву
+  if (c.name && (!c.article || !BUILTIN_SKUS.has(c.article))) p.set('name', c.name);
   const qty = orderQty(c);
   if (qty) p.set('qty', String(qty));
   return `${KANBAN_WEBHOOK}?${p.toString()}`;
@@ -307,6 +320,29 @@ function App() {
   const [editing, setEditing] = useState(null);  // null | 'new' | id
   const [form, setForm] = useState(EMPTY_KANBAN_FORM);
   const importRef = useRef(null);
+  const [customCatalog, setCustomCatalog] = useState(loadCustomCatalog);
+  const [newProduct, setNewProduct] = useState(null);   // null | {name, sku}
+  const catalog = [...PRODUCT_CATALOG, ...customCatalog];
+
+  useEffect(() => {
+    try { localStorage.setItem(CATALOG_LS_KEY, JSON.stringify(customCatalog)); } catch {}
+  }, [customCatalog]);
+
+  const addProduct = () => {
+    const name = (newProduct?.name || '').trim();
+    const sku  = (newProduct?.sku  || '').trim();
+    if (!name) return;
+    if (sku && catalog.some(p => p.sku === sku)) { alert(`Товар з артикулом ${sku} вже є в каталозі`); return; }
+    if (catalog.some(p => p.name.toLowerCase() === name.toLowerCase() && (p.sku || '') === sku)) { alert('Такий товар вже є в каталозі'); return; }
+    setCustomCatalog([...customCatalog, {sku: sku || undefined, name}]);
+    setForm(f => ({...f, name, article: sku}));
+    setNewProduct(null);
+  };
+
+  const removeProduct = (p) => {
+    if (!confirm(`Видалити «${p.name}» з каталогу? Картки з ним залишаться.`)) return;
+    setCustomCatalog(customCatalog.filter(x => catalogKey(x) !== catalogKey(p)));
+  };
 
   useEffect(() => {
     try { localStorage.setItem('sp_theme', dark ? 'dark' : 'light'); } catch {}
@@ -349,7 +385,7 @@ function App() {
   };
 
   const exportJson = () => {
-    const blob = new Blob([JSON.stringify(cards, null, 2)], {type:'application/json'});
+    const blob = new Blob([JSON.stringify({cards, catalog: customCatalog}, null, 2)], {type:'application/json'});
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `kanban-cards-${new Date().toISOString().slice(0,10)}.json`;
@@ -362,12 +398,17 @@ function App() {
     e.target.value = '';
     if (!file) return;
     file.text().then(text => {
-      const list = JSON.parse(text);
-      if (!Array.isArray(list)) throw new Error('not array');
+      const data = JSON.parse(text);
+      // старий формат експорту — просто масив карток
+      const list = Array.isArray(data) ? data : data?.cards;
+      if (!Array.isArray(list)) throw new Error('no cards');
       const ids = new Set(cards.map(c => c.id));
       const fresh = list.filter(c => c && c.name).map(c => (!c.id || ids.has(c.id)) ? {...c, id: newKanbanId()} : c);
       setCards([...cards, ...fresh]);
-      alert(`Імпортовано карток: ${fresh.length}`);
+      const known = new Set(catalog.map(catalogKey));
+      const freshProducts = (Array.isArray(data?.catalog) ? data.catalog : []).filter(p => p && p.name && !known.has(catalogKey(p)));
+      if (freshProducts.length) setCustomCatalog([...customCatalog, ...freshProducts]);
+      alert(`Імпортовано карток: ${fresh.length}` + (freshProducts.length ? `, товарів: ${freshProducts.length}` : ''));
     }).catch(() => alert('Не вдалося прочитати файл — потрібен JSON, збережений кнопкою «Експорт»'));
   };
 
@@ -394,7 +435,7 @@ function App() {
             🖨 Друкувати всі ({cards.length})
           </button>
           <span className="flex-1"/>
-          <button onClick={exportJson} disabled={cards.length === 0}
+          <button onClick={exportJson} disabled={cards.length === 0 && customCatalog.length === 0}
             className={`${btn} bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-40`}>⬇ Експорт</button>
           <button onClick={()=>importRef.current?.click()}
             className={`${btn} bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600`}>⬆ Імпорт</button>
@@ -409,7 +450,7 @@ function App() {
             <li>Друкуй A4-аркуш і ламінуй — 10 карток на сторінці (85×55 мм)</li>
             <li>Коли запас дійшов до min — скануй QR: запит автоматично потрапить у замовлення</li>
           </ol>
-          <p className="mt-2 text-xs text-blue-700 dark:text-blue-400">Картки зберігаються в цьому браузері. Щоб перенести на інший комп'ютер — «Експорт» / «Імпорт».</p>
+          <p className="mt-2 text-xs text-blue-700 dark:text-blue-400">Картки й додані товари зберігаються в цьому браузері. Щоб перенести на інший комп'ютер — «Експорт» / «Імпорт».</p>
         </div>
 
         {editing && (
@@ -428,19 +469,54 @@ function App() {
                   </button>
                 </div>
                 <div className="grid sm:grid-cols-2 gap-3">
-                  <label className="block sm:col-span-2">
+                  <div className="block sm:col-span-2">
                     <span className="text-xs text-gray-500 dark:text-gray-400">Обрати з каталогу</span>
-                    <select className="inp mt-1" value={PRODUCT_CATALOG.find(p=>p.name===form.name && p.sku===form.article) ? form.article : ''}
-                      onChange={e=>{
-                        const p = PRODUCT_CATALOG.find(x=>x.sku===e.target.value);
-                        if (p) setForm({...form, name:p.name, article:p.sku});
-                      }}>
-                      <option value="">— з каталогу: автозаповнить назву + артикул —</option>
-                      {PRODUCT_CATALOG.map(p=>(
-                        <option key={p.sku} value={p.sku}>{p.name} ({p.sku})</option>
-                      ))}
-                    </select>
-                  </label>
+                    <div className="flex gap-2 mt-1">
+                      <select className="inp" value={catalog.some(p => p.name===form.name && (p.sku||'')===form.article) ? catalogKey({sku:form.article, name:form.name}) : ''}
+                        onChange={e=>{
+                          const p = catalog.find(x => catalogKey(x)===e.target.value);
+                          if (p) setForm({...form, name:p.name, article:p.sku || ''});
+                        }}>
+                        <option value="">— з каталогу: автозаповнить назву + артикул —</option>
+                        <optgroup label="Каталог">
+                          {PRODUCT_CATALOG.map(p=>(
+                            <option key={catalogKey(p)} value={catalogKey(p)}>{p.name} ({p.sku})</option>
+                          ))}
+                        </optgroup>
+                        {customCatalog.length > 0 && (
+                          <optgroup label="Мої товари">
+                            {customCatalog.map(p=>(
+                              <option key={catalogKey(p)} value={catalogKey(p)}>{p.name}{p.sku ? ` (${p.sku})` : ''}</option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </select>
+                      <button type="button" onClick={()=>setNewProduct(newProduct ? null : {name: form.name, sku: form.article})}
+                        className="shrink-0 px-3 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white">
+                        + Новий товар
+                      </button>
+                    </div>
+                    {newProduct && (
+                      <div className="mt-2 p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 grid sm:grid-cols-[1fr_9rem_auto] gap-2 items-end">
+                        <label className="block">
+                          <span className="text-xs text-gray-500 dark:text-gray-400">Назва нового товару *</span>
+                          <input className="inp mt-1" autoFocus value={newProduct.name} onChange={e=>setNewProduct({...newProduct, name:e.target.value})}
+                            onKeyDown={e=>{ if (e.key==='Enter') { e.preventDefault(); addProduct(); } }} placeholder="напр. Мило рідке 5 л"/>
+                        </label>
+                        <label className="block">
+                          <span className="text-xs text-gray-500 dark:text-gray-400">Артикул</span>
+                          <input className="inp mt-1 font-mono" value={newProduct.sku} onChange={e=>setNewProduct({...newProduct, sku:e.target.value})}
+                            onKeyDown={e=>{ if (e.key==='Enter') { e.preventDefault(); addProduct(); } }} placeholder="необов'язково"/>
+                        </label>
+                        <div className="flex gap-2">
+                          <button type="button" onClick={addProduct} disabled={!newProduct.name.trim()}
+                            className="px-3 py-2 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white">Додати</button>
+                          <button type="button" onClick={()=>setNewProduct(null)}
+                            className="px-3 py-2 rounded-lg text-sm font-medium bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600">✕</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                   <label className="block sm:col-span-2">
                     <span className="text-xs text-gray-500 dark:text-gray-400">Назва товару *</span>
                     <input className="inp mt-1" required value={form.name} onChange={e=>setForm({...form, name:e.target.value})} placeholder="напр. Domestos Хвойна Свіжість 1 л"/>
@@ -538,6 +614,20 @@ function App() {
               );
             })}
           </div>
+        )}
+
+        {customCatalog.length > 0 && (
+          <details className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+            <summary className="cursor-pointer font-semibold text-sm">🧾 Мої товари в каталозі ({customCatalog.length})</summary>
+            <ul className="mt-3 divide-y divide-gray-100 dark:divide-gray-700 text-sm">
+              {customCatalog.map(p => (
+                <li key={catalogKey(p)} className="flex items-center justify-between gap-3 py-1.5">
+                  <span>{p.name}{p.sku && <span className="ml-2 font-mono text-xs text-gray-500">{p.sku}</span>}</span>
+                  <button onClick={()=>removeProduct(p)} className="px-2 py-1 rounded text-xs bg-red-50 dark:bg-red-950 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900">🗑</button>
+                </li>
+              ))}
+            </ul>
+          </details>
         )}
       </main>
 
